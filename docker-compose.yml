@@ -1,0 +1,16 @@
+services:
+  postgres:
+    image: postgres:16-alpine
+    container_name: velocity_keys_postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+      POSTGRES_DB: velocity_keys
+    ports:
+      - "5432:5432"
+    volumes:
+      - velocity_keys_postgres:/var/lib/postgresql/data
+
+volumes:
+  velocity_keys_postgres:

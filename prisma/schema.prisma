@@ -1,0 +1,229 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+enum RaceStatus {
+  WAITING
+  COUNTDOWN
+  LIVE
+  FINISHED
+  CANCELLED
+}
+
+enum TextMode {
+  PROSE
+  CODE
+  QUOTE
+  CUSTOM
+}
+
+model User {
+  id             String          @id @default(cuid())
+  email          String          @unique
+  username       String          @unique
+  passwordHash   String
+  rating         Int             @default(0)
+  createdAt      DateTime        @default(now())
+  updatedAt      DateTime        @updatedAt
+  rooms          Room[]          @relation("RoomOwner")
+  participants   Participant[]
+  keystrokes     KeystrokeEvent[]
+  practiceStats  PracticeStat[]
+  practiceSessions PracticeSession[]
+  ratingHistory  RatingHistory[]
+  dailyChallengeEntries DailyChallengeEntry[]
+  achievements   Achievement[]
+  sentFriendRequests FriendRequest[] @relation("FriendRequester")
+  receivedFriendRequests FriendRequest[] @relation("FriendAddressee")
+}
+
+model Room {
+  id          String          @id @default(cuid())
+  code        String          @unique
+  ownerId     String?
+  owner       User?           @relation("RoomOwner", fields: [ownerId], references: [id])
+  isPrivate   Boolean         @default(true)
+  isPractice  Boolean         @default(false)
+  textMode    TextMode        @default(PROSE)
+  raceMode    String          @default("WORDS")
+  codeLanguage String          @default("CPP")
+  difficulty  String          @default("MEDIUM")
+  durationSeconds Int          @default(120)
+  customText  String?
+  createdAt   DateTime        @default(now())
+  races       Race[]
+  spectators  Spectator[]
+}
+
+model RaceText {
+  id          String     @id @default(cuid())
+  title       String     @unique
+  body        String
+  mode        TextMode   @default(PROSE)
+  difficulty  Int        @default(1000)
+  language    String?
+  createdAt   DateTime   @default(now())
+  races       Race[]
+}
+
+model Race {
+  id             String          @id @default(cuid())
+  roomId         String
+  room           Room            @relation(fields: [roomId], references: [id])
+  textId         String?
+  text           RaceText?       @relation(fields: [textId], references: [id])
+  prompt         String
+  status         RaceStatus      @default(WAITING)
+  countdownAt    DateTime?
+  startedAt      DateTime?
+  finishedAt     DateTime?
+  createdAt      DateTime        @default(now())
+  participants   Participant[]
+  keystrokes     KeystrokeEvent[]
+}
+
+model Participant {
+  id              String          @id @default(cuid())
+  raceId          String
+  race            Race            @relation(fields: [raceId], references: [id])
+  userId          String
+  user            User            @relation(fields: [userId], references: [id])
+  isSpectator     Boolean         @default(false)
+  progress        Int             @default(0)
+  wpm             Float           @default(0)
+  accuracy        Float           @default(100)
+  errors          Int             @default(0)
+  consistency     Float           @default(100)
+  cheatScore      Float           @default(0)
+  cheatFlags      String[]        @default([])
+  finishedAt      DateTime?
+  placement       Int?
+  ratingBefore    Int             @default(0)
+  ratingAfter     Int?
+  joinedAt        DateTime        @default(now())
+  keystrokes      KeystrokeEvent[]
+
+  @@unique([raceId, userId])
+}
+
+model KeystrokeEvent {
+  id              String       @id @default(cuid())
+  raceId          String
+  race            Race         @relation(fields: [raceId], references: [id])
+  participantId   String
+  participant     Participant  @relation(fields: [participantId], references: [id])
+  userId          String
+  user            User         @relation(fields: [userId], references: [id])
+  index           Int
+  key             String
+  expected        String
+  correct         Boolean
+  elapsedMs       Int
+  intervalMs      Int
+  createdAt       DateTime     @default(now())
+}
+
+model PracticeStat {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  token       String
+  tokenType   String
+  attempts    Int      @default(0)
+  mistakes    Int      @default(0)
+  avgDelayMs  Float    @default(0)
+  updatedAt   DateTime @updatedAt
+
+  @@unique([userId, token, tokenType])
+}
+
+model PracticeSession {
+  id              String   @id @default(cuid())
+  userId          String
+  user            User     @relation(fields: [userId], references: [id])
+  durationSeconds Int
+  mode            String   @default("WORDS")
+  difficulty      String
+  codeLanguage    String   @default("CPP")
+  wpm             Float    @default(0)
+  accuracy        Float    @default(100)
+  consistency     Float    @default(100)
+  score           Int      @default(0)
+  createdAt       DateTime @default(now())
+}
+
+model RatingHistory {
+  id         String   @id @default(cuid())
+  userId     String
+  user       User     @relation(fields: [userId], references: [id])
+  raceId     String?
+  rating     Int
+  delta      Int
+  createdAt  DateTime @default(now())
+}
+
+model DailyChallenge {
+  id                String                @id @default(cuid())
+  challengeDate     String                @unique
+  prompt            String
+  durationSeconds   Int                   @default(60)
+  textMode          TextMode              @default(PROSE)
+  createdAt         DateTime              @default(now())
+  entries           DailyChallengeEntry[]
+}
+
+model DailyChallengeEntry {
+  id                String          @id @default(cuid())
+  challengeId       String
+  challenge         DailyChallenge  @relation(fields: [challengeId], references: [id])
+  userId            String
+  user              User            @relation(fields: [userId], references: [id])
+  wpm               Float           @default(0)
+  accuracy          Float           @default(100)
+  consistency       Float           @default(100)
+  score             Int             @default(0)
+  errors            Int             @default(0)
+  durationSeconds   Int
+  completedAt       DateTime        @default(now())
+
+  @@unique([challengeId, userId])
+}
+
+model Achievement {
+  id          String   @id @default(cuid())
+  userId      String
+  user        User     @relation(fields: [userId], references: [id])
+  code        String
+  title       String
+  description String
+  category    String
+  earnedAt    DateTime @default(now())
+
+  @@unique([userId, code])
+}
+
+model FriendRequest {
+  id           String   @id @default(cuid())
+  requesterId  String
+  requester    User     @relation("FriendRequester", fields: [requesterId], references: [id])
+  addresseeId  String
+  addressee    User     @relation("FriendAddressee", fields: [addresseeId], references: [id])
+  status       String   @default("PENDING")
+  createdAt    DateTime @default(now())
+  respondedAt  DateTime?
+
+  @@unique([requesterId, addresseeId])
+}
+
+model Spectator {
+  id        String   @id @default(cuid())
+  roomId    String
+  room      Room     @relation(fields: [roomId], references: [id])
+  socketId  String
+  joinedAt  DateTime @default(now())
+}
