@@ -13,6 +13,8 @@ type LiveRoom = {
   raceId: string;
   prompt: string;
   isPrivate: boolean;
+  isDuel: boolean;
+  capacity: number;
   textMode: TextMode;
   raceMode: PracticeMode;
   codeLanguage: CodeLanguage;
@@ -94,7 +96,7 @@ export class RaceService {
     const race = await prisma.race.create({
       data: { roomId: room.id, prompt, status: "WAITING" }
     });
-    const live = this.createLiveRoom(code, room.id, race.id, prompt, isPrivate, safeTextMode, safeRaceMode, codeLanguage, safeDifficulty, safeDuration);
+    const live = this.createLiveRoom(code, room.id, race.id, prompt, isPrivate, false, isPrivate ? PRIVATE_ROOM_CAPACITY : PUBLIC_ROOM_CAPACITY, safeTextMode, safeRaceMode, codeLanguage, safeDifficulty, safeDuration);
     await this.addPlayer(live, owner);
     return this.snapshot(live);
   }
@@ -114,6 +116,8 @@ export class RaceService {
         room.races[0].id,
         room.races[0].prompt,
         room.isPrivate,
+        false,
+        room.isPrivate ? PRIVATE_ROOM_CAPACITY : PUBLIC_ROOM_CAPACITY,
         room.textMode,
         normalizePracticeMode(room.raceMode),
         normalizeCodeLanguage(room.codeLanguage),
@@ -122,6 +126,7 @@ export class RaceService {
       );
     }
     if (spectator) {
+      if (live.isDuel) throw new Error("Quick duels are private between two matched racers.");
       live.spectators.add(user.id);
     } else {
       if (live.status !== "WAITING") throw new Error("This race has already started.");
@@ -140,6 +145,19 @@ export class RaceService {
       void prisma.race.update({ where: { id: live.raceId }, data: { status: "CANCELLED" } }).catch(() => undefined);
     }
     return { wasPlayer, snapshot: this.snapshot(live) };
+  }
+
+  removeUserFromAllRooms(userId: string) {
+    for (const live of this.rooms.values()) {
+      live.players.delete(userId);
+      live.events.delete(userId);
+      live.spectators.delete(userId);
+      if (live.players.size === 0 && (live.status === "WAITING" || live.status === "COUNTDOWN")) {
+        live.status = "CANCELLED";
+        void prisma.race.update({ where: { id: live.raceId }, data: { status: "CANCELLED" } }).catch(() => undefined);
+      }
+    }
+    this.leaveMatchmaking(userId);
   }
 
   publicRooms(): PublicRoomSummary[] {
@@ -188,7 +206,7 @@ export class RaceService {
     if (!match) return null;
 
     this.matchmaking = this.matchmaking.filter((queued) => queued.user.id !== user.id && queued.user.id !== match.user.id);
-    const snapshot = await this.createPublicMatch([user, match.user], entry);
+    const snapshot = await this.createDuel([user, match.user], entry);
     return snapshot;
   }
 
@@ -299,13 +317,13 @@ export class RaceService {
     }));
   }
 
-  private async createPublicMatch(users: ClientUser[], options: MatchmakingEntry) {
+  private async createDuel(users: ClientUser[], options: MatchmakingEntry) {
     const code = nanoid(6).toUpperCase();
     const prompt = await this.pickPrompt(options.raceMode, options.codeLanguage, options.difficulty, options.durationSeconds);
     const room = await prisma.room.create({
       data: {
         code,
-        isPrivate: false,
+        isPrivate: true,
         textMode: options.textMode,
         raceMode: options.raceMode,
         codeLanguage: options.codeLanguage,
@@ -314,7 +332,7 @@ export class RaceService {
       }
     });
     const race = await prisma.race.create({ data: { roomId: room.id, prompt, status: "WAITING" } });
-    const live = this.createLiveRoom(code, room.id, race.id, prompt, false, options.textMode, options.raceMode, options.codeLanguage, options.difficulty, options.durationSeconds);
+    const live = this.createLiveRoom(code, room.id, race.id, prompt, true, true, 2, options.textMode, options.raceMode, options.codeLanguage, options.difficulty, options.durationSeconds);
     for (const user of users) await this.addPlayer(live, user);
     return this.snapshot(live);
   }
@@ -325,6 +343,8 @@ export class RaceService {
     raceId: string,
     prompt: string,
     isPrivate: boolean,
+    isDuel: boolean,
+    capacity: number,
     textMode: TextMode,
     raceMode: PracticeMode,
     codeLanguage: CodeLanguage,
@@ -337,6 +357,8 @@ export class RaceService {
       raceId,
       prompt,
       isPrivate,
+      isDuel,
+      capacity,
       textMode,
       raceMode,
       codeLanguage,
@@ -353,9 +375,8 @@ export class RaceService {
 
   private async addPlayer(live: LiveRoom, user: ClientUser) {
     if (live.players.has(user.id)) return;
-    const capacity = live.isPrivate ? PRIVATE_ROOM_CAPACITY : PUBLIC_ROOM_CAPACITY;
-    if (live.players.size >= capacity) {
-      throw new Error(`${live.isPrivate ? "Private" : "Public"} room is full.`);
+    if (live.players.size >= live.capacity) {
+      throw new Error(`${live.isDuel ? "Quick duel" : live.isPrivate ? "Private" : "Public"} room is full.`);
     }
     live.players.set(user.id, {
       userId: user.id,
@@ -384,6 +405,7 @@ export class RaceService {
       raceId: live.raceId,
       prompt: live.prompt,
       isPrivate: live.isPrivate,
+      isDuel: live.isDuel,
       status: live.status,
       startsAt: live.startsAt,
       endsAt: live.endsAt,

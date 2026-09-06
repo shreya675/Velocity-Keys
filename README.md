@@ -14,31 +14,12 @@ Velocity Keys is a real-time TypeRacer-style app built with Next.js, React, Node
 - Prose, quote, custom text, and code-typing race modes
 - Analytics dashboard for WPM trends, accuracy trends, rating history, consistency, weak-token heatmaps, and recent races
 
-## Local Setup
+## Deployment Notes
 
-1. Install dependencies:
-
-   ```bash
-   npm install
-   ```
-
-2. Create `.env` from `.env.example` and point `DATABASE_URL` at a PostgreSQL database.
-
-3. Generate Prisma and run the migration:
-
-   ```bash
-   npm run prisma:generate
-   npm run prisma:migrate
-   npm run prisma:seed
-   ```
-
-4. Start the custom Next.js and Socket.io server:
-
-   ```bash
-   npm run dev
-   ```
-
-5. Open `http://localhost:3000`.
+- Use a platform that supports a long-running Node.js server because Socket.io needs persistent WebSocket connections.
+- Attach a managed PostgreSQL database and set `DATABASE_URL`.
+- Set `JWT_SECRET` and `NEXT_PUBLIC_APP_URL` for the deployed domain.
+- Run Prisma migrations during release so the production database has the latest schema.
 
 ## Architecture Notes
 

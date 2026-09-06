@@ -15,11 +15,17 @@ const port = Number(process.env.PORT ?? 3000);
 const app = next({ dev });
 const handle = app.getRequestHandler();
 const races = new RaceService();
+const userSockets = new Map<string, Set<string>>();
 
 async function main() {
   await app.prepare();
 
   const expressApp = express();
+  const server = http.createServer(expressApp);
+  const io = new Server(server, {
+    cors: { origin: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000" }
+  });
+
   expressApp.use(express.json({ limit: "1mb" }));
 
   expressApp.post("/api/auth/register", register);
@@ -27,6 +33,24 @@ async function main() {
 
   expressApp.get("/api/me", requireAuth, (req, res) => {
     res.json({ user: req.user });
+  });
+
+  expressApp.delete("/api/account", requireAuth, async (req, res) => {
+    const userId = req.user!.id;
+    races.removeUserFromAllRooms(userId);
+    await prisma.$transaction([
+      prisma.room.updateMany({ where: { ownerId: userId }, data: { ownerId: null } }),
+      prisma.keystrokeEvent.deleteMany({ where: { userId } }),
+      prisma.participant.deleteMany({ where: { userId } }),
+      prisma.practiceStat.deleteMany({ where: { userId } }),
+      prisma.practiceSession.deleteMany({ where: { userId } }),
+      prisma.ratingHistory.deleteMany({ where: { userId } }),
+      prisma.dailyChallengeEntry.deleteMany({ where: { userId } }),
+      prisma.achievement.deleteMany({ where: { userId } }),
+      prisma.friendRequest.deleteMany({ where: { OR: [{ requesterId: userId }, { addresseeId: userId }] } }),
+      prisma.user.delete({ where: { id: userId } })
+    ]);
+    res.json({ ok: true });
   });
 
   expressApp.post("/api/rooms", requireAuth, async (req, res) => {
@@ -154,11 +178,14 @@ async function main() {
     }
     if (reverseRequest?.status === "ACCEPTED") return res.json(await friendsSummary(req.user!.id));
 
-    await prisma.friendRequest.upsert({
+    const request = await prisma.friendRequest.upsert({
       where: { requesterId_addresseeId: { requesterId: req.user!.id, addresseeId: targetUser.id } },
       update: { status: "PENDING", respondedAt: null },
-      create: { requesterId: req.user!.id, addresseeId: targetUser.id }
+      create: { requesterId: req.user!.id, addresseeId: targetUser.id },
+      include: { requester: true, addressee: true }
     });
+    emitToUser(io, targetUser.id, "friend:request", friendRequestSummary(request));
+    void sendFriendRequestEmail(targetUser.email, req.user!.username);
     res.json(await friendsSummary(req.user!.id));
   });
 
@@ -302,11 +329,6 @@ async function main() {
 
   expressApp.all("*", (req, res) => handle(req, res));
 
-  const server = http.createServer(expressApp);
-  const io = new Server(server, {
-    cors: { origin: process.env.NEXT_PUBLIC_APP_URL ?? "http://localhost:3000" }
-  });
-
   io.use(async (socket, nextSocket) => {
     const token = socket.handshake.auth.token || socket.handshake.headers.authorization?.toString().replace("Bearer ", "");
     const user = await userFromToken(token);
@@ -316,6 +338,18 @@ async function main() {
   });
 
   io.on("connection", (socket) => {
+    const userId = socket.data.user.id;
+    const sockets = userSockets.get(userId) ?? new Set<string>();
+    sockets.add(socket.id);
+    userSockets.set(userId, sockets);
+
+    socket.on("disconnect", () => {
+      const userSocketIds = userSockets.get(userId);
+      if (!userSocketIds) return;
+      userSocketIds.delete(socket.id);
+      if (userSocketIds.size === 0) userSockets.delete(userId);
+    });
+
     socket.on("room:join", async ({ code, spectator }: { code: string; spectator?: boolean }, ack?: (payload: unknown) => void) => {
       try {
         const snapshot = await races.joinRoom(code, socket.data.user, spectator);
@@ -450,6 +484,36 @@ function friendUser(user: { id: string; username: string; rating: number }) {
   };
 }
 
+function emitToUser(io: Server, userId: string, event: string, payload: unknown) {
+  const sockets = userSockets.get(userId);
+  if (!sockets) return;
+  sockets.forEach((socketId) => io.to(socketId).emit(event, payload));
+}
+
+async function sendFriendRequestEmail(to: string, requesterUsername: string) {
+  const apiKey = process.env.RESEND_API_KEY;
+  const from = process.env.EMAIL_FROM;
+  if (!apiKey || !from) return;
+
+  try {
+    await fetch("https://api.resend.com/emails", {
+      method: "POST",
+      headers: {
+        Authorization: `Bearer ${apiKey}`,
+        "Content-Type": "application/json"
+      },
+      body: JSON.stringify({
+        from,
+        to,
+        subject: "New Velocity Keys friend request",
+        text: `${requesterUsername} sent you a friend request on Velocity Keys. Open the Friends page to accept or decline it.`
+      })
+    });
+  } catch (error) {
+    console.error("Friend request email failed", error);
+  }
+}
+
 async function leaderboardUser(user: { id: string; username: string; rating: number; createdAt: Date }): Promise<LeaderboardUser> {
   const [raceStats, practiceStats, podiums, wins, achievements] = await Promise.all([
     prisma.participant.aggregate({
@@ -568,11 +632,45 @@ async function awardAchievements(
   userId: string,
   result: { source: "practice" | "daily"; wpm: number; accuracy: number; consistency: number; score: number; errors: number }
 ) {
-  const [practiceCount, dailyCount] = await Promise.all([
-    prisma.practiceSession.count({ where: { userId } }),
-    prisma.dailyChallengeEntry.count({ where: { userId } })
+  const [practiceStats, dailyEntries, practiceDates] = await Promise.all([
+    prisma.practiceSession.aggregate({
+      where: { userId },
+      _count: { _all: true },
+      _sum: { durationSeconds: true },
+      _max: { wpm: true },
+      _avg: { accuracy: true, consistency: true }
+    }),
+    prisma.dailyChallengeEntry.findMany({
+      where: { userId },
+      select: { completedAt: true, durationSeconds: true, wpm: true, accuracy: true, consistency: true, errors: true }
+    }),
+    prisma.practiceSession.findMany({
+      where: { userId },
+      select: { createdAt: true }
+    })
   ]);
-  const unlocked = achievementCatalog.filter((achievement) => achievement.isUnlocked({ ...result, practiceCount, dailyCount }));
+  const dailyTypingSeconds = dailyEntries.reduce((sum, entry) => sum + entry.durationSeconds, 0);
+  const practiceCount = practiceStats._count._all;
+  const dailyCount = dailyEntries.length;
+  const stats: AchievementStats = {
+    ...result,
+    practiceCount,
+    dailyCount,
+    totalTests: practiceCount + dailyCount,
+    totalTypingSeconds: (practiceStats._sum.durationSeconds ?? 0) + dailyTypingSeconds,
+    bestWpm: Math.max(practiceStats._max.wpm ?? 0, result.wpm, ...dailyEntries.map((entry) => entry.wpm)),
+    averageAccuracy: weightedAverage(practiceStats._avg.accuracy, practiceCount, avg(dailyEntries.map((entry) => entry.accuracy)), dailyCount, 100),
+    averageConsistency: weightedAverage(practiceStats._avg.consistency, practiceCount, avg(dailyEntries.map((entry) => entry.consistency)), dailyCount, 100),
+    streakDays: currentTypingStreak([
+      ...practiceDates.map((session) => session.createdAt),
+      ...dailyEntries.map((entry) => entry.completedAt)
+    ]),
+    cleanDailyCount: dailyEntries.filter((entry) => entry.errors === 0).length
+  };
+  const unlocked = achievementCatalog.filter((achievement) => achievement.isUnlocked(stats));
+  await prisma.achievement.deleteMany({
+    where: { userId, code: { in: legacyAchievementCodes } }
+  });
   await Promise.all(unlocked.map((achievement) => prisma.achievement.upsert({
     where: { userId_code: { userId, code: achievement.code } },
     update: {},
@@ -883,97 +981,191 @@ const dailyChallengePrompts = [
   "Skill grows when feedback is specific. Slow down around difficult letters, keep moving through easy words, and finish with fewer avoidable errors."
 ];
 
+type AchievementStats = {
+  source: "practice" | "daily";
+  wpm: number;
+  accuracy: number;
+  consistency: number;
+  score: number;
+  errors: number;
+  practiceCount: number;
+  dailyCount: number;
+  totalTests: number;
+  totalTypingSeconds: number;
+  bestWpm: number;
+  averageAccuracy: number;
+  averageConsistency: number;
+  streakDays: number;
+  cleanDailyCount: number;
+};
+
+const legacyAchievementCodes = ["FIRST_TEST", "ACCURACY_95", "NO_ERRORS", "WPM_50", "WPM_75", "CONSISTENCY_90", "SCORE_1000", "TEN_TESTS", "FIRST_DAILY", "DAILY_CLEAN"];
+
 const achievementCatalog: {
   code: string;
   title: string;
   description: string;
   category: string;
-  isUnlocked: (stats: {
-    source: "practice" | "daily";
-    wpm: number;
-    accuracy: number;
-    consistency: number;
-    score: number;
-    errors: number;
-    practiceCount: number;
-    dailyCount: number;
-  }) => boolean;
+  isUnlocked: (stats: AchievementStats) => boolean;
 }[] = [
   {
-    code: "FIRST_TEST",
-    title: "First Test",
-    description: "Completed your first practice session.",
-    category: "Practice",
-    isUnlocked: ({ practiceCount }) => practiceCount >= 1
+    code: "TESTS_10",
+    title: "Ten Test Foundation",
+    description: "Completed 10 saved typing tests.",
+    category: "Volume",
+    isUnlocked: ({ totalTests }) => totalTests >= 10
   },
   {
-    code: "ACCURACY_95",
-    title: "Precision Line",
-    description: "Finished a test with at least 95% accuracy.",
-    category: "Accuracy",
-    isUnlocked: ({ accuracy }) => accuracy >= 95
+    code: "TESTS_50",
+    title: "Fifty Test Habit",
+    description: "Completed 50 saved typing tests.",
+    category: "Volume",
+    isUnlocked: ({ totalTests }) => totalTests >= 50
   },
   {
-    code: "NO_ERRORS",
-    title: "Clean Sheet",
-    description: "Finished a test without any typing errors.",
-    category: "Accuracy",
-    isUnlocked: ({ errors }) => errors === 0
+    code: "TESTS_100",
+    title: "Hundred Run Club",
+    description: "Completed 100 saved typing tests.",
+    category: "Volume",
+    isUnlocked: ({ totalTests }) => totalTests >= 100
   },
   {
-    code: "WPM_50",
-    title: "Fast Hands",
-    description: "Reached 50 WPM in a completed test.",
+    code: "TESTS_500",
+    title: "Five Hundred Finish Lines",
+    description: "Completed 500 saved typing tests.",
+    category: "Volume",
+    isUnlocked: ({ totalTests }) => totalTests >= 500
+  },
+  {
+    code: "TIME_100_MIN",
+    title: "Hundred Minute Mark",
+    description: "Logged 100 minutes of typing time.",
+    category: "Time",
+    isUnlocked: ({ totalTypingSeconds }) => totalTypingSeconds >= 100 * 60
+  },
+  {
+    code: "TIME_500_MIN",
+    title: "Five Hundred Minutes",
+    description: "Logged 500 minutes of typing time.",
+    category: "Time",
+    isUnlocked: ({ totalTypingSeconds }) => totalTypingSeconds >= 500 * 60
+  },
+  {
+    code: "TIME_1000_MIN",
+    title: "Thousand Minute Typist",
+    description: "Logged 1000 minutes of typing time.",
+    category: "Time",
+    isUnlocked: ({ totalTypingSeconds }) => totalTypingSeconds >= 1000 * 60
+  },
+  {
+    code: "STREAK_7",
+    title: "Seven Day Chain",
+    description: "Typed on 7 consecutive days.",
+    category: "Streak",
+    isUnlocked: ({ streakDays }) => streakDays >= 7
+  },
+  {
+    code: "STREAK_30",
+    title: "Thirty Day Discipline",
+    description: "Typed on 30 consecutive days.",
+    category: "Streak",
+    isUnlocked: ({ streakDays }) => streakDays >= 30
+  },
+  {
+    code: "STREAK_50",
+    title: "Fifty Day Flow",
+    description: "Typed on 50 consecutive days.",
+    category: "Streak",
+    isUnlocked: ({ streakDays }) => streakDays >= 50
+  },
+  {
+    code: "DAILY_7",
+    title: "Weekly Challenger",
+    description: "Completed 7 daily challenges.",
+    category: "Daily",
+    isUnlocked: ({ dailyCount }) => dailyCount >= 7
+  },
+  {
+    code: "DAILY_30",
+    title: "Monthly Challenger",
+    description: "Completed 30 daily challenges.",
+    category: "Daily",
+    isUnlocked: ({ dailyCount }) => dailyCount >= 30
+  },
+  {
+    code: "DAILY_100",
+    title: "Daily Centurion",
+    description: "Completed 100 daily challenges.",
+    category: "Daily",
+    isUnlocked: ({ dailyCount }) => dailyCount >= 100
+  },
+  {
+    code: "DAILY_CLEAN_10",
+    title: "Ten Clean Dailies",
+    description: "Completed 10 daily challenges with no errors.",
+    category: "Daily",
+    isUnlocked: ({ cleanDailyCount }) => cleanDailyCount >= 10
+  },
+  {
+    code: "BEST_50_WPM",
+    title: "Personal Speed 50",
+    description: "Reached a saved best of 50 WPM.",
     category: "Speed",
-    isUnlocked: ({ wpm }) => wpm >= 50
+    isUnlocked: ({ bestWpm }) => bestWpm >= 50
   },
   {
-    code: "WPM_75",
-    title: "Velocity Shift",
-    description: "Reached 75 WPM in a completed test.",
+    code: "BEST_75_WPM",
+    title: "Personal Speed 75",
+    description: "Reached a saved best of 75 WPM.",
     category: "Speed",
-    isUnlocked: ({ wpm }) => wpm >= 75
+    isUnlocked: ({ bestWpm }) => bestWpm >= 75
   },
   {
-    code: "CONSISTENCY_90",
-    title: "Steady Rhythm",
-    description: "Finished with at least 90% consistency.",
+    code: "BEST_100_WPM",
+    title: "Personal Speed 100",
+    description: "Reached a saved best of 100 WPM.",
+    category: "Speed",
+    isUnlocked: ({ bestWpm }) => bestWpm >= 100
+  },
+  {
+    code: "AVG_ACCURACY_95",
+    title: "Reliable Accuracy",
+    description: "Maintained at least 95% average accuracy across saved tests.",
+    category: "Accuracy",
+    isUnlocked: ({ totalTests, averageAccuracy }) => totalTests >= 20 && averageAccuracy >= 95
+  },
+  {
+    code: "AVG_CONSISTENCY_90",
+    title: "Steady Over Time",
+    description: "Maintained at least 90% average consistency across saved tests.",
     category: "Control",
-    isUnlocked: ({ consistency }) => consistency >= 90
-  },
-  {
-    code: "SCORE_1000",
-    title: "Four Digit Run",
-    description: "Scored 1000 or more in one test.",
-    category: "Score",
-    isUnlocked: ({ score }) => score >= 1000
-  },
-  {
-    code: "TEN_TESTS",
-    title: "Habit Builder",
-    description: "Completed 10 practice sessions.",
-    category: "Practice",
-    isUnlocked: ({ practiceCount }) => practiceCount >= 10
-  },
-  {
-    code: "FIRST_DAILY",
-    title: "Daily Debut",
-    description: "Completed your first daily challenge.",
-    category: "Daily",
-    isUnlocked: ({ dailyCount }) => dailyCount >= 1
-  },
-  {
-    code: "DAILY_CLEAN",
-    title: "Daily Clear",
-    description: "Completed a daily challenge with no errors.",
-    category: "Daily",
-    isUnlocked: ({ source, errors }) => source === "daily" && errors === 0
+    isUnlocked: ({ totalTests, averageConsistency }) => totalTests >= 20 && averageConsistency >= 90
   }
 ];
 
 function avg(values: number[]) {
   if (!values.length) return 0;
   return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function currentTypingStreak(dates: Date[]) {
+  const typedDays = new Set(dates.map((date) => date.toISOString().slice(0, 10)));
+  if (!typedDays.size) return 0;
+
+  const cursor = new Date();
+  let currentKey = cursor.toISOString().slice(0, 10);
+  if (!typedDays.has(currentKey)) {
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+    currentKey = cursor.toISOString().slice(0, 10);
+  }
+  if (!typedDays.has(currentKey)) return 0;
+
+  let streak = 0;
+  while (typedDays.has(cursor.toISOString().slice(0, 10))) {
+    streak += 1;
+    cursor.setUTCDate(cursor.getUTCDate() - 1);
+  }
+  return streak;
 }
 
 main().catch((error) => {

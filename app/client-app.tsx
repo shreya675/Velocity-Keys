@@ -2,14 +2,16 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import { Activity, Award, BarChart3, BookOpen, Bot, Braces, CalendarDays, Check, Copy, Eye, Flag, Gauge, History, Keyboard, Link as LinkIcon, Lock, LogIn, Moon, Play, Plus, Quote, Radar, RefreshCcw, ShieldAlert, Sparkles, Square, Sun, Target, Timer, Trophy, UserPlus, Users, WholeWord, X } from "lucide-react";
+import { Activity, Award, BarChart3, BookOpen, Braces, CalendarDays, Check, Copy, Eye, Flag, Gauge, History, Keyboard, Link as LinkIcon, Lock, LogIn, LogOut, Moon, Palette, Play, Plus, Quote, Radar, Settings, Sparkles, Square, Sun, Target, Timer, Trash2, Trophy, UserPlus, Users, WholeWord, X } from "lucide-react";
 import { calculateAccuracy, calculateConsistency, calculateWpm, levelForRating, practiceScore } from "@/lib/race-math";
-import type { AnalyticsSummary, ClientUser, CodeLanguage, DailyChallengeSummary, FriendsSummary, KeystrokePayload, LeaderboardSummary, LeaderboardUser, PracticeDifficulty, PracticeHistoryItem, PracticeMode, PracticeResult, PublicRoomSummary, RaceSnapshot, TextMode, VocabularyEntry } from "@/lib/types";
+import type { AnalyticsSummary, ClientUser, CodeLanguage, DailyChallengeSummary, FriendRequestSummary, FriendsSummary, KeystrokePayload, LeaderboardSummary, LeaderboardUser, PracticeDifficulty, PracticeHistoryItem, PracticeMode, PracticeResult, PublicRoomSummary, RaceSnapshot, TextMode, VocabularyEntry } from "@/lib/types";
 
 type AuthMode = "login" | "register";
 type ApiResult<T> = T & { error?: string };
-type ActiveView = "practice" | "race" | "daily" | "friends" | "leaderboard" | "history" | "profile";
+type ActiveView = "practice" | "race" | "daily" | "friends" | "leaderboard" | "history" | "profile" | "settings" | "help";
 type Theme = "light" | "dark";
+type ThemeShade = "mint" | "ocean" | "violet" | "rose" | "amber" | "forest" | "slate" | "crimson" | "indigo" | "lime" | "cyan" | "orchid";
+type ErrorLockMode = "off" | "word" | "letter";
 type LeaderboardScope = "public" | "friends";
 type ToastTone = "info" | "success" | "error";
 type ToastMessage = { id: number; message: string; tone: ToastTone };
@@ -20,7 +22,14 @@ export default function Home() {
   const [authMode, setAuthMode] = useState<AuthMode>("login");
   const [authForm, setAuthForm] = useState({ email: "", username: "", password: "" });
   const [authError, setAuthError] = useState("");
-  const [theme, setTheme] = useState<Theme>("light");
+  const [theme, setTheme] = useState<Theme>("dark");
+  const [themeShade, setThemeShade] = useState<ThemeShade>("mint");
+  const [quietMistakes, setQuietMistakes] = useState(false);
+  const [errorLockMode, setErrorLockMode] = useState<ErrorLockMode>("off");
+  const [paceTargetEnabled, setPaceTargetEnabled] = useState(false);
+  const [paceTarget, setPaceTarget] = useState(60);
+  const [autoFocusTyping, setAutoFocusTyping] = useState(true);
+  const [finishEffects, setFinishEffects] = useState(true);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>("practice");
   const [snapshot, setSnapshot] = useState<RaceSnapshot | null>(null);
@@ -43,7 +52,9 @@ export default function Home() {
   const [leaderboard, setLeaderboard] = useState<LeaderboardSummary | null>(null);
   const [leaderboardScope, setLeaderboardScope] = useState<LeaderboardScope>("public");
   const [profileUser, setProfileUser] = useState<LeaderboardUser | null>(null);
+  const [myProfile, setMyProfile] = useState<LeaderboardUser | null>(null);
   const [friends, setFriends] = useState<FriendsSummary | null>(null);
+  const [friendNoticeCount, setFriendNoticeCount] = useState(0);
   const [friendUsername, setFriendUsername] = useState("");
   const [practiceHistory, setPracticeHistory] = useState<PracticeHistoryItem[]>([]);
   const [dailyChallenge, setDailyChallenge] = useState<DailyChallengeSummary | null>(null);
@@ -62,6 +73,8 @@ export default function Home() {
   const [vocabularyEntries, setVocabularyEntries] = useState<VocabularyEntry[]>([]);
   const [practiceSaved, setPracticeSaved] = useState(false);
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
+  const [deleteAccountConfirming, setDeleteAccountConfirming] = useState(false);
+  const [deleteAccountText, setDeleteAccountText] = useState("");
   const [celebrate, setCelebrate] = useState(false);
   const inputRef = useRef<HTMLDivElement | null>(null);
   const raceStartedAtRef = useRef(0);
@@ -79,10 +92,20 @@ export default function Home() {
     const savedToken = localStorage.getItem("vk_token") ?? "";
     const savedUser = localStorage.getItem("vk_user");
     const savedTheme = localStorage.getItem("vk_theme");
+    const savedShade = localStorage.getItem("vk_theme_shade");
+    const savedErrorLock = localStorage.getItem("vk_error_lock");
+    const savedPaceTarget = Number(localStorage.getItem("vk_pace_target") ?? 60);
     const inviteCode = new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase() ?? "";
     if (savedToken) setToken(savedToken);
     if (savedUser) setUser(JSON.parse(savedUser));
     if (savedTheme === "dark" || savedTheme === "light") setTheme(savedTheme);
+    if (isThemeShade(savedShade)) setThemeShade(savedShade);
+    setQuietMistakes(localStorage.getItem("vk_quiet_mistakes") === "1");
+    if (isErrorLockMode(savedErrorLock)) setErrorLockMode(savedErrorLock);
+    setPaceTargetEnabled(localStorage.getItem("vk_pace_target_enabled") === "1");
+    if (Number.isFinite(savedPaceTarget)) setPaceTarget(clampNumber(savedPaceTarget, 10, 250));
+    setAutoFocusTyping(localStorage.getItem("vk_auto_focus") !== "0");
+    setFinishEffects(localStorage.getItem("vk_finish_effects") !== "0");
     setAppOrigin(process.env.NEXT_PUBLIC_APP_URL ?? window.location.origin);
     if (inviteCode) {
       setPendingInviteCode(inviteCode);
@@ -95,6 +118,32 @@ export default function Home() {
     document.documentElement.dataset.theme = theme;
     localStorage.setItem("vk_theme", theme);
   }, [theme]);
+
+  useEffect(() => {
+    document.documentElement.dataset.accent = themeShade;
+    localStorage.setItem("vk_theme_shade", themeShade);
+  }, [themeShade]);
+
+  useEffect(() => {
+    localStorage.setItem("vk_quiet_mistakes", quietMistakes ? "1" : "0");
+  }, [quietMistakes]);
+
+  useEffect(() => {
+    localStorage.setItem("vk_error_lock", errorLockMode);
+  }, [errorLockMode]);
+
+  useEffect(() => {
+    localStorage.setItem("vk_pace_target_enabled", paceTargetEnabled ? "1" : "0");
+    localStorage.setItem("vk_pace_target", String(paceTarget));
+  }, [paceTargetEnabled, paceTarget]);
+
+  useEffect(() => {
+    localStorage.setItem("vk_auto_focus", autoFocusTyping ? "1" : "0");
+  }, [autoFocusTyping]);
+
+  useEffect(() => {
+    localStorage.setItem("vk_finish_effects", finishEffects ? "1" : "0");
+  }, [finishEffects]);
 
   useEffect(() => {
     if (!token) return;
@@ -110,18 +159,27 @@ export default function Home() {
         const now = nextSnapshot.startsAt ?? Date.now();
         raceStartedAtRef.current = now;
         setRaceStartedAt(now);
-        inputRef.current?.focus();
+        if (autoFocusTyping) inputRef.current?.focus();
       }
-      if (nextSnapshot.status === "FINISHED") {
+      if (nextSnapshot.status === "FINISHED" && finishEffects) {
         setCelebrate(true);
         window.setTimeout(() => setCelebrate(false), 1800);
       }
+    });
+    nextSocket.on("friend:request", (request: FriendRequestSummary) => {
+      setFriends((current) => {
+        if (!current) return current;
+        if (current.incoming.some((item) => item.id === request.id)) return current;
+        return { ...current, incoming: [request, ...current.incoming] };
+      });
+      setFriendNoticeCount((count) => count + 1);
+      showToast(`${request.requester.username} sent you a friend request.`, "info");
     });
     setSocket(nextSocket);
     return () => {
       nextSocket.disconnect();
     };
-  }, [token]);
+  }, [autoFocusTyping, finishEffects, showToast, token]);
 
   useEffect(() => {
     const id = window.setInterval(() => setClock(Date.now()), 250);
@@ -140,6 +198,7 @@ export default function Home() {
   const racerCount = snapshot?.players.length ?? 0;
   const amReady = Boolean(user && snapshot?.readyUserIds.includes(user.id));
   const raceSettingsLocked = Boolean(snapshot && snapshot.status !== "FINISHED");
+  const roomTitle = snapshot?.isDuel ? `Quick Duel ${snapshot.roomCode}` : snapshot ? `${snapshot.isPrivate ? "Private" : "Public"} Room ${snapshot.roomCode}` : "Race Track";
   const practiceElapsedMs = isPracticeRunning ? Math.max(0, clock - practiceStartedAt) : practiceStartedAt ? Math.min(practiceDuration * 1000, clock - practiceStartedAt) : 0;
   const practiceRemaining = isPracticeRunning ? Math.max(0, practiceDuration - Math.floor(practiceElapsedMs / 1000)) : practiceDuration;
   const customTimerMinutes = Math.floor(practiceDuration / 60);
@@ -224,6 +283,13 @@ export default function Home() {
       return;
     }
     setProfileUser(result.user);
+  }, [authHeaders, token]);
+
+  const loadMyProfile = useCallback(async () => {
+    if (!token) return;
+    const result = await api<ApiResult<{ user: LeaderboardUser }>>("/api/profile/me", { headers: authHeaders });
+    if (result.error) return;
+    setMyProfile(result.user);
   }, [authHeaders, token]);
 
   const loadFriends = useCallback(async () => {
@@ -374,7 +440,9 @@ export default function Home() {
 
   useEffect(() => {
     void loadAnalytics();
-  }, [loadAnalytics]);
+    void loadPracticeHistory();
+    void loadMyProfile();
+  }, [loadAnalytics, loadMyProfile, loadPracticeHistory]);
 
   useEffect(() => {
     if (activeView === "leaderboard") {
@@ -482,7 +550,7 @@ export default function Home() {
       body: JSON.stringify({ textMode: textModeForPracticeMode(raceMode), raceMode, codeLanguage, difficulty: raceDifficulty, durationSeconds: raceDuration })
     });
     if (!result.matched || !result.snapshot) {
-      showToast("Queued for ELO matchmaking. We will pair you inside a +/- 220 rating band.");
+      showToast("Finding a 1v1 duel near your rating.");
       return;
     }
     setSnapshot(result.snapshot);
@@ -495,6 +563,46 @@ export default function Home() {
     setTextMode(textModeForPracticeMode(result.snapshot.raceMode ?? "WORDS"));
     void loadPublicRooms();
     socket?.emit("room:join", { code: result.snapshot.roomCode });
+  };
+
+  const logout = () => {
+    socket?.disconnect();
+    setToken("");
+    setUser(null);
+    setSnapshot(null);
+    setMyProfile(null);
+    setProfileUser(null);
+    setTyped("");
+    localStorage.removeItem("vk_token");
+    localStorage.removeItem("vk_user");
+    showToast("Logged out.", "success");
+  };
+
+  const deleteAccount = async () => {
+    if (deleteAccountText !== "DELETE") {
+      showToast("Type DELETE to confirm account deletion.", "error");
+      return;
+    }
+    const result = await api<ApiResult<{ ok: boolean }>>("/api/account", {
+      method: "DELETE",
+      headers: authHeaders
+    });
+    if (result.error) {
+      showToast(result.error, "error");
+      return;
+    }
+    socket?.disconnect();
+    setToken("");
+    setUser(null);
+    setSnapshot(null);
+    setMyProfile(null);
+    setProfileUser(null);
+    setTyped("");
+    setDeleteAccountConfirming(false);
+    setDeleteAccountText("");
+    localStorage.removeItem("vk_token");
+    localStorage.removeItem("vk_user");
+    showToast("Account deleted.", "success");
   };
 
   const leaveRoom = async () => {
@@ -539,7 +647,7 @@ export default function Home() {
     setPracticeStartedAt(now);
     setIsPracticeRunning(true);
     lastStrokeAtRef.current = 0;
-    inputRef.current?.focus();
+    if (autoFocusTyping) inputRef.current?.focus();
   };
 
   const startDailyChallenge = async () => {
@@ -554,7 +662,7 @@ export default function Home() {
     setDailyStartedAt(now);
     setIsDailyRunning(true);
     lastStrokeAtRef.current = 0;
-    inputRef.current?.focus();
+    if (autoFocusTyping) inputRef.current?.focus();
   };
 
   const finishPractice = useCallback(async () => {
@@ -580,7 +688,7 @@ export default function Home() {
     });
     setPracticeResult(result);
     showToast(`Practice complete: ${result.wpm} WPM, ${result.accuracy}% accuracy.`, "success");
-    if (result.score >= 900 && result.accuracy >= 90) {
+    if (finishEffects && result.score >= 900 && result.accuracy >= 90) {
       setCelebrate(true);
       window.setTimeout(() => setCelebrate(false), 3200);
     }
@@ -590,7 +698,9 @@ export default function Home() {
       localStorage.setItem("vk_user", JSON.stringify(nextUser));
     }
     void loadAnalytics();
-  }, [authHeaders, isPracticeRunning, loadAnalytics, practiceDifficulty, practiceDuration, practiceEvents, practiceMetrics.accuracy, practiceMetrics.consistency, practiceMetrics.errors, practiceMetrics.wpm, practiceMode, practicePrompt, practiceSaved, showToast, user, vocabularyEntries]);
+    void loadPracticeHistory();
+    void loadMyProfile();
+  }, [authHeaders, finishEffects, isPracticeRunning, loadAnalytics, loadMyProfile, loadPracticeHistory, practiceDifficulty, practiceDuration, practiceEvents, practiceMetrics.accuracy, practiceMetrics.consistency, practiceMetrics.errors, practiceMetrics.wpm, practiceMode, practicePrompt, practiceSaved, showToast, user, vocabularyEntries]);
 
   const finishDailyChallenge = useCallback(async () => {
     if (!dailyChallenge || !isDailyRunning || dailySaved) return;
@@ -614,11 +724,12 @@ export default function Home() {
     }
     setDailyChallenge(result);
     showToast(`Daily challenge saved: ${dailyMetrics.wpm} WPM, score ${dailyMetrics.score}.`, "success");
-    if (dailyMetrics.score >= 900 && dailyMetrics.accuracy >= 90) {
+    if (finishEffects && dailyMetrics.score >= 900 && dailyMetrics.accuracy >= 90) {
       setCelebrate(true);
       window.setTimeout(() => setCelebrate(false), 3200);
     }
-  }, [authHeaders, dailyChallenge, dailyMetrics.accuracy, dailyMetrics.consistency, dailyMetrics.errors, dailyMetrics.score, dailyMetrics.wpm, dailySaved, isDailyRunning, showToast]);
+    void loadMyProfile();
+  }, [authHeaders, dailyChallenge, dailyMetrics.accuracy, dailyMetrics.consistency, dailyMetrics.errors, dailyMetrics.score, dailyMetrics.wpm, dailySaved, finishEffects, isDailyRunning, loadMyProfile, showToast]);
 
   useEffect(() => {
     if (isPracticeRunning && practiceRemaining <= 0) {
@@ -744,14 +855,17 @@ export default function Home() {
       snapshot ? onTyping(next) : canTypeDaily ? onDailyTyping(next) : onPracticeTyping(next);
       return;
     }
-    if (event.key === "Enter" && (snapshot?.raceMode === "CODE" || practiceMode === "CODE")) {
+    const isCodeTyping = canTypeRace ? snapshot?.raceMode === "CODE" : canTypePractice && practiceMode === "CODE";
+    if (event.key === "Enter" && isCodeTyping) {
       event.preventDefault();
+      if (shouldBlockTyping(errorLockMode, typed, target, "\n")) return;
       const next = `${typed}\n`;
       snapshot ? onTyping(next) : canTypeDaily ? onDailyTyping(next) : onPracticeTyping(next);
       return;
     }
     if (event.key.length === 1) {
       event.preventDefault();
+      if (shouldBlockTyping(errorLockMode, typed, target, event.key)) return;
       const next = `${typed}${event.key}`;
       snapshot ? onTyping(next) : canTypeDaily ? onDailyTyping(next) : onPracticeTyping(next);
     }
@@ -759,12 +873,12 @@ export default function Home() {
 
   if (!user) {
     return (
-      <main className="min-h-screen overflow-hidden px-5 py-7 text-ink">
+      <main className="auth-stage min-h-screen overflow-hidden px-5 py-7 text-ink">
         <ToastStack toasts={toasts} />
-        <section className="relative mx-auto grid min-h-[calc(100vh-3.5rem)] max-w-6xl items-center gap-8 lg:grid-cols-[minmax(0,1fr)_440px]">
-          <div className="max-w-3xl">
+        <section className="relative mx-auto grid min-h-[calc(100vh-3.5rem)] max-w-6xl items-center gap-8 lg:grid-cols-[minmax(0,1fr)_460px]">
+          <div className="auth-copy max-w-3xl">
             <div className="mb-5 flex flex-wrap items-center gap-3">
-              <div className="inline-flex items-center gap-2 rounded-lg border border-line bg-surface/85 px-3 py-2 text-sm font-black uppercase shadow-soft backdrop-blur">
+              <div className="auth-brand inline-flex items-center gap-2 rounded-lg border border-line bg-surface/85 px-3 py-2 text-sm font-black uppercase shadow-soft backdrop-blur">
                 <Keyboard className="h-4 w-4 text-mint" /> Velocity Keys
               </div>
               <button className={compactButton} onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
@@ -774,35 +888,29 @@ export default function Home() {
             <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-mint/40 bg-mint/10 px-3 py-1 text-xs font-black uppercase text-mint">
               <Sparkles className="h-3.5 w-3.5" /> Built for focused typing practice
             </div>
-            <h1 className="max-w-3xl text-5xl font-black leading-[1.02] tracking-normal md:text-7xl">
+            <h1 className="auth-headline max-w-3xl text-5xl font-black leading-[1.02] tracking-normal md:text-7xl">
               Type cleaner. Climb higher.
             </h1>
             <p className="mt-5 max-w-2xl text-lg font-medium leading-8 text-muted">
               Practice with timed drills, race friends in private rooms, and track the progress that actually matters: speed, accuracy, consistency, and rating.
             </p>
-            <div className="mt-7 max-w-2xl rounded-lg border border-line bg-panel/85 p-5 shadow-glow backdrop-blur-xl">
-              <div className="mb-4 flex items-center justify-between gap-3 border-b border-line pb-3">
-                <div className="text-xs font-black uppercase text-muted">Practice Preview</div>
-                <div className="font-mono text-sm font-black text-mint">64 WPM</div>
+            <div className="typing-showcase mt-7 max-w-2xl rounded-lg border border-line bg-panel/75 p-4 shadow-soft backdrop-blur-xl">
+              <div className="mb-3 flex items-center justify-between gap-3 text-xs font-black uppercase text-muted">
+                <span className="flex items-center gap-2"><Gauge className="h-4 w-4 text-mint" /> Live typing flow</span>
+                <span className="font-mono text-mint">64 WPM</span>
               </div>
-              <div className="font-mono text-2xl font-black leading-10 md:text-3xl md:leading-[3rem]">
-                <span className="text-muted">steady rhythm rewards </span>
-                <span className="text-mint">clean accuracy</span>
-                <span className="text-muted"> and calm corrections</span>
+              <div className="typing-line font-mono text-xl font-black leading-9 md:text-2xl">
+                <span>steady rhythm rewards </span><span className="text-mint">clean accuracy</span><span> and calm corrections</span>
               </div>
-              <div className="mt-5 grid gap-2 sm:grid-cols-3">
-                {["Private races", "Daily challenge", "Progress dashboard"].map((item) => (
-                  <div className="rounded-lg border border-line bg-surface/70 px-3 py-2 text-center text-xs font-black uppercase text-muted" key={item}>
-                    {item}
-                  </div>
-                ))}
+              <div className="mt-4 h-2 overflow-hidden rounded-full bg-line">
+                <div className="auth-progress h-full rounded-full bg-mint" />
               </div>
             </div>
           </div>
-          <div className="glass-panel rounded-lg border border-line bg-panel/95 p-5 pt-6 shadow-glow backdrop-blur-xl">
+          <div className="auth-card glass-panel rounded-lg border border-line bg-panel/95 p-5 pt-6 shadow-glow backdrop-blur-xl">
             <div className="mb-4">
               <div className="inline-flex items-center gap-2 rounded-full border border-line bg-surface/75 px-3 py-1 text-xs font-black uppercase text-muted">
-                <Check className="h-3.5 w-3.5 text-mint" /> Ready to play locally
+                <Check className="h-3.5 w-3.5 text-mint" /> Ready to race
               </div>
               <h2 className="mt-3 text-3xl font-black">{authMode === "login" ? "Welcome back" : "Create your racer"}</h2>
               <p className="mt-1 text-sm font-medium text-muted">Save your tests, rooms, ratings, achievements, and typing history.</p>
@@ -818,6 +926,13 @@ export default function Home() {
             <input className={field} placeholder="password" type="password" value={authForm.password} onChange={(e) => setAuthForm({ ...authForm, password: e.target.value })} />
             {authError && <p className="mb-3 text-sm font-semibold text-coral">{authError}</p>}
             <button className={primaryButton} onClick={submitAuth}>{authMode === "login" ? "Enter arena" : "Create account"}</button>
+            <div className="mt-4 grid grid-cols-8 gap-2">
+              {"ASDFJKL;".split("").map((key, index) => (
+                <div className="login-key rounded-md border border-line bg-surface/75 py-2 text-center font-mono text-xs font-black shadow-soft" key={key} style={{ animationDelay: `${index * 90}ms` }}>
+                  {key}
+                </div>
+              ))}
+            </div>
             <div className="mt-4 grid grid-cols-3 gap-2 text-center">
               <div className="rounded-lg border border-line bg-surface/70 p-3">
                 <div className="font-mono text-lg font-black">6</div>
@@ -839,32 +954,48 @@ export default function Home() {
   }
 
   return (
-    <main className="min-h-screen px-4 py-5 text-ink md:px-8">
+      <main className="min-h-screen px-4 py-5 text-ink md:px-8">
       <ToastStack toasts={toasts} />
       {celebrate && <FinishCelebration />}
+      {snapshot?.status === "COUNTDOWN" && <RaceCountdownOverlay countdown={countdown} />}
       <header className="glass-panel mx-auto mb-6 flex max-w-[1500px] flex-wrap items-center justify-between gap-4 rounded-lg border border-line bg-panel/80 px-5 py-5 shadow-soft backdrop-blur-xl">
         <div>
           <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-line bg-surface/70 px-3 py-1 text-xs font-black uppercase text-muted">
             <Sparkles className="h-3.5 w-3.5 text-brass" /> Real-time Typing Arena
           </div>
-          <h1 className="text-4xl font-black md:text-5xl">Velocity Keys</h1>
+          <div className="flex items-center gap-3">
+            <h1 className="text-4xl font-black md:text-5xl">Velocity Keys</h1>
+          </div>
           <p className="mt-1 text-base font-semibold text-muted md:text-lg">{user.username} · {user.rating} ELO · {levelForRating(user.rating)}</p>
         </div>
         <div className="flex flex-wrap gap-2">
           <button className={activeView === "practice" ? activeCompactButton : compactButton} onClick={() => { setActiveView("practice"); void loadPractice(); }}><Target className="h-4 w-4" /> Practice</button>
           <button className={activeView === "race" ? activeCompactButton : compactButton} onClick={() => setActiveView("race")}><Users className="h-4 w-4" /> Race</button>
           <button className={activeView === "daily" ? activeCompactButton : compactButton} onClick={() => { setActiveView("daily"); void loadDailyChallenge(); }}><CalendarDays className="h-4 w-4" /> Daily</button>
-          <button className={activeView === "friends" ? activeCompactButton : compactButton} onClick={() => { setActiveView("friends"); void loadFriends(); }}><UserPlus className="h-4 w-4" /> Friends</button>
+          <button
+            className={`relative ${activeView === "friends" ? activeCompactButton : compactButton}`}
+            onClick={() => {
+              setActiveView("friends");
+              setFriendNoticeCount(0);
+              void loadFriends();
+            }}
+          >
+            <UserPlus className="h-4 w-4" /> Friends
+            {friendNoticeCount > 0 && (
+              <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full border border-panel bg-coral px-1 font-mono text-[10px] font-black text-white">
+                {friendNoticeCount > 9 ? "9+" : friendNoticeCount}
+              </span>
+            )}
+          </button>
           <button className={activeView === "leaderboard" ? activeCompactButton : compactButton} onClick={() => setActiveView("leaderboard")}><Trophy className="h-4 w-4" /> Leaderboard</button>
           <button className={activeView === "history" ? activeCompactButton : compactButton} onClick={() => { setActiveView("history"); void loadPracticeHistory(); }}><History className="h-4 w-4" /> History</button>
           <button className={activeView === "profile" ? activeCompactButton : compactButton} onClick={() => { setActiveView("profile"); void loadProfile(); }}><Users className="h-4 w-4" /> Profile</button>
-          <button className={compactButton} onClick={() => setTheme(theme === "light" ? "dark" : "light")}>{theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />} {theme === "light" ? "Dark" : "Light"}</button>
-          <button className={compactButton} onClick={loadAnalytics}><RefreshCcw className="h-4 w-4" /> Refresh</button>
-          <button className={compactButton} onClick={() => { localStorage.clear(); location.reload(); }}>Logout</button>
+          <button className={activeView === "settings" ? activeCompactButton : compactButton} onClick={() => setActiveView("settings")}><Settings className="h-4 w-4" /> Settings</button>
+          <button className={activeView === "help" ? activeCompactButton : compactButton} onClick={() => setActiveView("help")}><BookOpen className="h-4 w-4" /> How To Use</button>
         </div>
       </header>
 
-      <section className="mx-auto grid max-w-[1500px] gap-4 xl:grid-cols-[minmax(0,1fr)_380px]">
+      <section className={`mx-auto grid max-w-[1500px] gap-4 ${activeView === "leaderboard" || activeView === "history" || activeView === "settings" || activeView === "help" || activeView === "friends" || activeView === "daily" || activeView === "profile" ? "" : "xl:grid-cols-[minmax(0,1fr)_380px]"}`}>
         <section className="space-y-4">
           {activeView === "practice" && (
             <div className="grid gap-3 md:grid-cols-3">
@@ -897,6 +1028,7 @@ export default function Home() {
               metrics={dailyMetrics}
               remaining={dailyRemaining}
               running={isDailyRunning}
+              quietMistakes={quietMistakes}
               inputRef={inputRef}
               onKeyDown={handleTypeKey}
               onStart={startDailyChallenge}
@@ -915,10 +1047,41 @@ export default function Home() {
               }}
             />
           ) : activeView === "history" ? (
-            <PracticeHistoryView history={practiceHistory} />
+            <HistoryView history={practiceHistory} />
+          ) : activeView === "settings" ? (
+            <SettingsView
+              theme={theme}
+              themeShade={themeShade}
+              quietMistakes={quietMistakes}
+              errorLockMode={errorLockMode}
+              paceTargetEnabled={paceTargetEnabled}
+              paceTarget={paceTarget}
+              autoFocusTyping={autoFocusTyping}
+              finishEffects={finishEffects}
+              deleteAccountConfirming={deleteAccountConfirming}
+              deleteAccountText={deleteAccountText}
+              onThemeChange={setTheme}
+              onThemeShadeChange={setThemeShade}
+              onQuietMistakesChange={setQuietMistakes}
+              onErrorLockModeChange={setErrorLockMode}
+              onPaceTargetEnabledChange={setPaceTargetEnabled}
+              onPaceTargetChange={(value) => setPaceTarget(clampNumber(value, 10, 250))}
+              onAutoFocusTypingChange={setAutoFocusTyping}
+              onFinishEffectsChange={setFinishEffects}
+              onLogout={logout}
+              onStartDelete={() => setDeleteAccountConfirming(true)}
+              onCancelDelete={() => {
+                setDeleteAccountConfirming(false);
+                setDeleteAccountText("");
+              }}
+              onDeleteTextChange={setDeleteAccountText}
+              onDeleteAccount={deleteAccount}
+            />
+          ) : activeView === "help" ? (
+            <HowToUseView />
           ) : (
             <>
-          <Panel title={activeView === "race" ? snapshot ? `${snapshot.isPrivate ? "Private" : "Public"} Room ${snapshot.roomCode}` : "Race Track" : "Practice Track"} icon={<Keyboard className="h-4 w-4" />}>
+          <Panel title={activeView === "race" ? roomTitle : "Practice Track"} icon={<Keyboard className="h-4 w-4" />}>
             {snapshot?.status === "FINISHED" ? (
               <div className="mb-4 grid gap-2 md:grid-cols-4">
                 <Metric label="Final WPM" value={String(me?.wpm ?? 0)} />
@@ -972,6 +1135,7 @@ export default function Home() {
               code={snapshot?.raceMode === "CODE" || (!snapshot && practiceMode === "CODE") || raceMode === "CODE"}
               focusIndex={typed.length}
               active={Boolean(snapshot ? snapshot.status === "LIVE" : isPracticeRunning)}
+              quietMistakes={quietMistakes}
               onKeyDown={handleTypeKey}
             />
             {activeView === "race" ? (
@@ -1005,31 +1169,11 @@ export default function Home() {
             )}
           </Panel>
 
-          {activeView === "race" && (
-            <Panel title="Leaderboard" icon={<Trophy className="h-4 w-4" />}>
-              <div className="space-y-2">
-                {(snapshot?.players ?? []).map((player, index) => (
-                  <div key={player.userId} className="grid grid-cols-[28px_1fr_64px] items-center gap-3 rounded-lg border border-line bg-surface/75 p-3 shadow-sm">
-                    <strong>{index + 1}</strong>
-                    <div>
-                      <div className="flex justify-between gap-3 text-sm font-bold">
-                        <span>{player.username}</span>
-                        <span>{snapshot?.status === "WAITING" ? player.ready ? "Ready" : "Not ready" : `${player.rating} pts`}</span>
-                      </div>
-                      <div className="mt-2 h-2 bg-line"><div className="h-full bg-mint" style={{ width: `${player.progress}%` }} /></div>
-                    </div>
-                    <span className="text-right font-mono text-sm">{snapshot?.status === "WAITING" ? `${player.progress}%` : `${player.wpm} WPM`}</span>
-                  </div>
-                ))}
-                {!snapshot && <p className="text-sm text-muted">Create, join, or matchmake into a room to see live opponents.</p>}
-              </div>
-            </Panel>
-          )}
             </>
           )}
         </section>
 
-        <aside className="space-y-4">
+        {activeView !== "leaderboard" && activeView !== "history" && activeView !== "settings" && activeView !== "help" && activeView !== "friends" && activeView !== "daily" && activeView !== "profile" && <aside className="space-y-4">
           {activeView === "practice" ? (
             <Panel title="Practice Settings" icon={<Timer className="h-4 w-4" />}>
               <label className="text-xs font-bold uppercase text-muted">Timer</label>
@@ -1156,7 +1300,7 @@ export default function Home() {
               <Panel title="Race Lobby" icon={<Users className="h-4 w-4" />}>
                 {raceSettingsLocked && (
                   <div className="mb-3 rounded-lg border border-line bg-surface/70 p-3 text-xs font-bold uppercase text-muted">
-                    Room settings are locked until this race ends.
+                    {snapshot?.isDuel ? "Quick Duel is locked to the two matched racers." : "Room settings are locked until this race ends."}
                   </div>
                 )}
                 <label className="text-xs font-bold uppercase text-muted">Mode</label>
@@ -1230,9 +1374,6 @@ export default function Home() {
                   <div className="mb-3 rounded-lg border border-line bg-surface/70 p-3">
                     <div className="mb-2 flex items-center justify-between gap-2">
                       <span className="text-xs font-black uppercase text-muted">Open public rooms</span>
-                      <button className="rounded border border-line bg-panel/80 px-2 py-1 text-xs font-bold" disabled={raceSettingsLocked} onClick={() => void loadPublicRooms()}>
-                        Refresh
-                      </button>
                     </div>
                     <div className="space-y-2">
                       {publicRooms.length ? publicRooms.map((room) => (
@@ -1262,7 +1403,7 @@ export default function Home() {
                 <button className={primaryButton} disabled={raceSettingsLocked} onClick={() => createRoom(roomVisibility === "private")}>
                   <Plus className="h-4 w-4" /> Create {roomVisibility === "private" ? "Private" : "Public"} Room
                 </button>
-                {snapshot?.roomCode ? (
+                {snapshot?.roomCode && !snapshot.isDuel ? (
                   <div className="my-3 rounded-lg border border-line bg-surface/70 p-3">
                     <div className="mb-2 flex items-center gap-2 text-xs font-black uppercase text-muted">
                       <LinkIcon className="h-3.5 w-3.5" /> Room invite link
@@ -1271,7 +1412,7 @@ export default function Home() {
                       <input
                         className="w-full rounded-lg border border-line bg-panel/85 px-3 py-2 font-mono text-xs outline-none"
                         readOnly
-                        value={`${appOrigin || "http://localhost:3000"}?room=${snapshot.roomCode}`}
+                        value={appOrigin ? `${appOrigin}?room=${snapshot.roomCode}` : `?room=${snapshot.roomCode}`}
                       />
                       <button className={secondaryButton} onClick={copyInviteLink}><Copy className="h-4 w-4" /> Copy</button>
                     </div>
@@ -1282,105 +1423,47 @@ export default function Home() {
                   <button className={secondaryButton} disabled={raceSettingsLocked} onClick={() => joinRoom(false)}>Join</button>
                   <button className={secondaryButton} disabled={raceSettingsLocked} onClick={() => joinRoom(true)}><Eye className="h-4 w-4" /> Watch</button>
                 </div>
-                <button className={primaryButton} disabled={raceSettingsLocked} onClick={matchmake}><Radar className="h-4 w-4" /> ELO Matchmaking</button>
+                <button className={primaryButton} disabled={raceSettingsLocked} onClick={matchmake}><Radar className="h-4 w-4" /> Quick Duel</button>
               </Panel>
 
-              <Panel title="Anti-Cheat" icon={<ShieldAlert className="h-4 w-4" />}>
-                <Metric label="Cheat score" value={`${me?.cheatScore ?? 0}/100`} />
-                <div className="mt-3 flex flex-wrap gap-2">
-                  {(me?.cheatFlags.length ? me.cheatFlags : ["clean so far"]).map((flag) => (
-                    <span className="rounded border border-line bg-surface/70 px-2 py-1 text-xs font-bold" key={flag}>{flag}</span>
-                  ))}
-                </div>
-              </Panel>
             </>
-          ) : activeView === "daily" ? (
-            <Panel title="Daily Rules" icon={<CalendarDays className="h-4 w-4" />}>
-              <div className="grid grid-cols-2 gap-2">
-                <Metric label="Time" value={formatDuration(dailyChallenge?.durationSeconds ?? 60)} />
-                <Metric label="Entries" value={String(dailyChallenge?.leaderboard.length ?? 0)} />
-              </div>
-              <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-medium text-muted">
-                One fixed prompt is shared by everyone each day. Replays are allowed, but only your best score stays on today&apos;s board.
-              </div>
-              {dailyChallenge?.myEntry ? (
-                <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-medium">
-                  Your best today: <span className="font-mono font-black">{dailyChallenge.myEntry.score}</span> score at <span className="font-mono font-black">{dailyChallenge.myEntry.wpm}</span> WPM.
-                </div>
-              ) : null}
-              <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-medium text-muted">
-                <kbd className={kbdClass}>Esc</kbd> restarts the current daily run.
-              </div>
-            </Panel>
-          ) : activeView === "friends" ? (
-            <Panel title="Friend System" icon={<UserPlus className="h-4 w-4" />}>
-              <div className="grid grid-cols-2 gap-2">
-                <Metric label="Friends" value={String(friends?.friends.length ?? 0)} />
-                <Metric label="Requests" value={String(friends?.incoming.length ?? 0)} />
-              </div>
-              <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-medium text-muted">
-                Send requests by exact username. Accepted friends appear in the Friends leaderboard scope.
-              </div>
-              <button className={`${secondaryButton} mt-3`} onClick={() => void loadFriends()}>
-                <RefreshCcw className="h-4 w-4" /> Refresh friends
-              </button>
-            </Panel>
-          ) : activeView === "history" ? (
-            <Panel title="History Summary" icon={<History className="h-4 w-4" />}>
-              <div className="grid grid-cols-2 gap-2">
-                <Metric label="Tests" value={String(practiceHistory.length)} />
-                <Metric label="Best WPM" value={String(Math.max(0, ...practiceHistory.map((item) => item.wpm)))} />
-              </div>
-              <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-medium text-muted">
-                Every completed practice test is saved with mode, difficulty, language, score, accuracy, consistency, and date.
-              </div>
-              <button className={`${secondaryButton} mt-3`} onClick={() => void loadPracticeHistory()}>
-                <RefreshCcw className="h-4 w-4" /> Refresh history
-              </button>
-            </Panel>
-          ) : activeView === "leaderboard" ? (
-            <Panel title="Leaderboard Guide" icon={<Trophy className="h-4 w-4" />}>
-              <div className="grid grid-cols-2 gap-2">
-                <Metric label="Public users" value={String(leaderboard?.users.length ?? 0)} />
-                <Metric label="Scope" value={leaderboardScope} />
-              </div>
-              <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-medium text-muted">
-                Public ranks everyone by ELO. Friends shows only users whose friend requests were accepted.
-              </div>
-              <button className={`${secondaryButton} mt-3`} onClick={() => void loadLeaderboard(leaderboardScope)}>
-                <RefreshCcw className="h-4 w-4" /> Refresh leaderboard
-              </button>
-            </Panel>
           ) : (
-            <Panel title="Profile Summary" icon={<Users className="h-4 w-4" />}>
-              <div className="grid grid-cols-2 gap-2">
-                <Metric label="Rating" value={String(profileUser?.rating ?? user.rating)} />
-                <Metric label="Level" value={profileUser?.level ?? levelForRating(user.rating)} />
-              </div>
-              <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-medium text-muted">
-                Profile stats combine multiplayer races and normal practice sessions. Finish practice tests to increase total typing time and practice count.
-              </div>
-              <button className={`${secondaryButton} mt-3`} onClick={() => void loadProfile(profileUser?.id ?? "me")}>
-                <RefreshCcw className="h-4 w-4" /> Refresh profile
-              </button>
-            </Panel>
-          )}
-
-          {activeView === "race" && (
-            <Panel title="Ghost Replay" icon={<Bot className="h-4 w-4" />}>
-              <p className="mb-3 text-sm text-muted">Completed race keystrokes are stored with elapsed timing so a replay runner can render previous lines stroke by stroke.</p>
-              <div className="space-y-2">
-                {safeAnalytics.recentRaces.map((race) => (
-                  <div className="rounded-lg border border-line bg-surface/75 p-2 text-sm" key={race.id}>
-                    <div className="flex justify-between font-bold"><span>{race.wpm} WPM</span><span>#{race.placement ?? "-"}</span></div>
-                    <div className="text-xs text-muted">{new Date(race.date).toLocaleString()}</div>
-                  </div>
-                ))}
+            <Panel title="Settings" icon={<Settings className="h-4 w-4" />}>
+              <div className="rounded-lg border border-line bg-surface/70 p-3 text-sm font-medium text-muted">
+                Choose your color shade, switch theme, or manage your account from the Settings page.
               </div>
             </Panel>
           )}
-        </aside>
+          {activeView === "practice" && (
+            <ProgressCoach
+              analytics={safeAnalytics}
+              currentView={activeView}
+              dailyChallenge={dailyChallenge}
+              friends={friends}
+              leaderboard={leaderboard}
+              practiceHistory={practiceHistory}
+              profile={myProfile}
+              showPageTip={false}
+              showRecentActivity={false}
+              user={user}
+              onUseSuggestion={(mode, difficulty, duration) => {
+                setActiveView("practice");
+                setPracticeMode(mode);
+                setPracticeDifficulty(difficulty);
+                setPracticeDuration(duration);
+                void loadPractice(mode, duration, difficulty, codeLanguage);
+              }}
+            />
+          )}
+        </aside>}
       </section>
+      {activeView === "race" && (
+        <section className="mx-auto mt-4 max-w-[1500px]">
+          <Panel title="Leaderboard" icon={<Trophy className="h-4 w-4" />}>
+            <RaceRoomLeaderboard snapshot={snapshot} />
+          </Panel>
+        </section>
+      )}
     </main>
   );
 }
@@ -1391,6 +1474,18 @@ function Panel({ title, icon, children }: { title: string; icon: React.ReactNode
       <h2 className="mb-4 flex items-center gap-2 text-sm font-black uppercase tracking-normal text-muted">{icon}{title}</h2>
       {children}
     </div>
+  );
+}
+
+function SettingRow({ icon, title, description, children }: { icon: React.ReactNode; title: string; description: string; children: React.ReactNode }) {
+  return (
+    <section className="grid gap-3 rounded-lg border border-line bg-surface/70 p-4 md:grid-cols-[minmax(0,1fr)_minmax(260px,360px)] md:items-center">
+      <div>
+        <h3 className="flex items-center gap-2 text-sm font-black uppercase text-muted">{icon}{title}</h3>
+        <p className="mt-2 max-w-3xl text-sm font-semibold leading-6 text-muted">{description}</p>
+      </div>
+      <div>{children}</div>
+    </section>
   );
 }
 
@@ -1433,12 +1528,60 @@ function ToastStack({ toasts }: { toasts: ToastMessage[] }) {
   );
 }
 
+function RaceRoomLeaderboard({ snapshot }: { snapshot: RaceSnapshot | null }) {
+  const players = snapshot?.players ?? [];
+  if (!players.length) {
+    return <p className="text-sm font-semibold text-muted">Create, join, or start a quick duel to see live opponents.</p>;
+  }
+
+  return (
+    <div className="overflow-hidden rounded-lg border border-line bg-surface/65">
+      <div className="grid grid-cols-[64px_1fr_130px_130px_130px] gap-3 border-b border-line bg-panel/75 px-4 py-3 text-[11px] font-black uppercase text-muted">
+        <span>Rank</span>
+        <span>User</span>
+        <span className="text-right">Status</span>
+        <span className="text-right">Progress</span>
+        <span className="text-right">WPM</span>
+      </div>
+      {players.map((player, index) => (
+        <div key={player.userId} className="grid grid-cols-[64px_1fr_130px_130px_130px] items-center gap-3 border-b border-line px-4 py-4 last:border-b-0">
+          <span className="font-mono text-xl font-black">#{index + 1}</span>
+          <div>
+            <div className="font-black">{player.username}</div>
+            <div className="mt-2 h-2 overflow-hidden rounded-full bg-line">
+              <div className="h-full rounded-full bg-mint transition-all duration-500" style={{ width: `${player.progress}%` }} />
+            </div>
+          </div>
+          <span className="text-right text-sm font-black text-muted">{snapshot?.status === "WAITING" ? player.ready ? "Ready" : "Not ready" : `${player.rating} pts`}</span>
+          <span className="text-right font-mono font-black">{player.progress}%</span>
+          <span className="text-right font-mono font-black">{player.wpm}</span>
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function RaceCountdownOverlay({ countdown }: { countdown: number }) {
+  return (
+    <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center bg-ink/45 backdrop-blur-sm">
+      <div className="race-pop rounded-lg border border-mint bg-panel/95 px-12 py-10 text-center shadow-glow">
+        <div className="text-sm font-black uppercase text-muted">Race starts in</div>
+        <div className="mt-2 font-mono text-8xl font-black text-mint">{countdown || "Go"}</div>
+      </div>
+    </div>
+  );
+}
+
 function FinishCelebration() {
   const pieces = Array.from({ length: 28 }, (_, index) => index);
   return (
-    <div className="pointer-events-none fixed inset-0 z-40 overflow-hidden">
-      <div className="absolute left-1/2 top-8 flex -translate-x-1/2 items-center gap-2 rounded-full border border-mint bg-panel/95 px-5 py-3 font-black text-ink shadow-glow backdrop-blur-xl">
-        <Sparkles className="h-5 w-5 text-brass" /> Strong finish
+    <div className="pointer-events-none fixed inset-0 z-40 flex items-center justify-center overflow-hidden bg-ink/35 backdrop-blur-[2px]">
+      <div className="race-pop rounded-lg border border-mint bg-panel/95 px-10 py-7 text-center text-ink shadow-glow backdrop-blur-xl">
+        <div className="mx-auto mb-3 flex h-12 w-12 items-center justify-center rounded-full bg-mint text-white">
+          <Sparkles className="h-6 w-6" />
+        </div>
+        <div className="text-3xl font-black">Race complete</div>
+        <div className="mt-1 text-sm font-bold uppercase text-muted">Results are ready</div>
       </div>
       {pieces.map((piece) => (
         <span
@@ -1535,6 +1678,18 @@ function FriendsView({
 
   return (
     <div className="space-y-4">
+      <Panel title="Friend System" icon={<UserPlus className="h-4 w-4" />}>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <Metric label="Friends" value={String(accepted.length)} />
+          <Metric label="Incoming" value={String(incoming.length)} />
+          <Metric label="Outgoing" value={String(outgoing.length)} />
+          <Metric label="Leaderboard" value="Friends" />
+        </div>
+        <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-semibold text-muted">
+          Send a request by exact username, accept incoming requests, and compare accepted friends from the Friends tab on the leaderboard.
+        </div>
+      </Panel>
+
       <Panel title="Friends" icon={<UserPlus className="h-4 w-4" />}>
         <div className="mb-4 grid gap-2 md:grid-cols-[minmax(0,1fr)_220px]">
           <input
@@ -1615,6 +1770,42 @@ function FriendsView({
   );
 }
 
+function HistoryView({ history }: { history: PracticeHistoryItem[] }) {
+  return (
+    <div className="space-y-4">
+      <HistorySummary history={history} />
+      <PracticeHistoryView history={history} />
+    </div>
+  );
+}
+
+function HistorySummary({ history }: { history: PracticeHistoryItem[] }) {
+  const bestWpm = Math.max(0, ...history.map((item) => item.wpm));
+  const averageWpm = Math.round(avgNumber(history.map((item) => item.wpm)));
+  const averageAccuracy = Math.round(avgNumber(history.map((item) => item.accuracy)) * 10) / 10;
+  const bestScore = Math.max(0, ...history.map((item) => item.score));
+  const totalTime = history.reduce((sum, item) => sum + item.durationSeconds, 0);
+  const latest = history[0];
+
+  return (
+    <Panel title="History Summary" icon={<History className="h-4 w-4" />}>
+      <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-6">
+        <Metric label="Tests" value={String(history.length)} />
+        <Metric label="Best WPM" value={String(bestWpm)} />
+        <Metric label="Avg WPM" value={String(averageWpm)} />
+        <Metric label="Accuracy" value={`${averageAccuracy}%`} />
+        <Metric label="Best Score" value={String(bestScore)} />
+        <Metric label="Time" value={formatTypingTime(totalTime)} />
+      </div>
+      <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-semibold text-muted">
+        {latest
+          ? `Latest saved test: ${formatModeLabel(latest.mode)} · ${titleCase(latest.difficulty)} · ${latest.wpm} WPM · ${new Date(latest.createdAt).toLocaleString()}`
+          : "Finish a practice test and your saved results will appear here."}
+      </div>
+    </Panel>
+  );
+}
+
 function PracticeHistoryView({ history }: { history: PracticeHistoryItem[] }) {
   return (
     <Panel title="Practice History" icon={<History className="h-4 w-4" />}>
@@ -1655,6 +1846,401 @@ function PracticeHistoryView({ history }: { history: PracticeHistoryItem[] }) {
   );
 }
 
+function HowToUseView() {
+  const guideSections = [
+    {
+      title: "Start With Practice",
+      icon: <Target className="h-4 w-4" />,
+      items: [
+        "Open Practice, choose a timer, difficulty, and typing format.",
+        "Press Start Practice and type directly over the shown text.",
+        "WPM, accuracy, score, consistency, and errors are shown after the session ends."
+      ]
+    },
+    {
+      title: "Typing Modes",
+      icon: <Keyboard className="h-4 w-4" />,
+      items: [
+        "Words gives continuous random word practice.",
+        "Vocab places useful vocabulary inside meaningful sentences and explains the words after the test.",
+        "Story, Quote, Code, and Adaptive modes change the kind of text you practice on."
+      ]
+    },
+    {
+      title: "Race With Others",
+      icon: <Users className="h-4 w-4" />,
+      items: [
+        "Open Race and choose mode, difficulty, time, and room type before creating a room.",
+        "Private rooms support invite links and room codes. Public rooms appear in the public room list.",
+        "Everyone in the room must press Ready / Start Race before the countdown begins."
+      ]
+    },
+    {
+      title: "Quick Duel",
+      icon: <Radar className="h-4 w-4" />,
+      items: [
+        "Quick Duel searches for one opponent near your rating.",
+        "When matched, it creates a locked 1v1 race so random users cannot join.",
+        "Race results update ratings from speed, accuracy, consistency, placement, and mistakes."
+      ]
+    },
+    {
+      title: "Daily Challenge",
+      icon: <CalendarDays className="h-4 w-4" />,
+      items: [
+        "Daily Challenge uses the same text for everyone on that date.",
+        "You can replay it, but your best score is kept for the daily leaderboard.",
+        "Use it when you want a fair comparison with other users."
+      ]
+    },
+    {
+      title: "Progress Pages",
+      icon: <BarChart3 className="h-4 w-4" />,
+      items: [
+        "Profile shows rating, best WPM, average WPM, accuracy, races, practice tests, wins, and typing time.",
+        "Leaderboard has Public and Friends scopes.",
+        "History lists every completed practice test with mode, difficulty, score, accuracy, and date."
+      ]
+    },
+    {
+      title: "Friends And Spectators",
+      icon: <UserPlus className="h-4 w-4" />,
+      items: [
+        "Send friend requests by exact username from the Friends page.",
+        "Accepted friends can be compared in the Friends leaderboard.",
+        "Use Watch to join a room as a spectator without racing."
+      ]
+    },
+    {
+      title: "Settings",
+      icon: <Settings className="h-4 w-4" />,
+      items: [
+        "Switch light or dark theme and choose a color shade.",
+        "Change mistake visibility, correction lock, pace target, auto-focus, and finish animation.",
+        "Logout and permanent account deletion are kept in Settings."
+      ]
+    }
+  ];
+
+  return (
+    <div className="space-y-4">
+      <Panel title="How To Use Velocity Keys" icon={<BookOpen className="h-4 w-4" />}>
+        <div className="rounded-lg border border-line bg-surface/75 p-5">
+          <div className="max-w-3xl">
+            <div className="text-3xl font-black">Everything starts from the top navigation.</div>
+            <p className="mt-3 text-base font-semibold leading-7 text-muted">
+              Use Practice for solo improvement, Race for live multiplayer, Daily for a shared challenge, and Profile or History to understand your progress.
+            </p>
+          </div>
+          <div className="mt-5 grid gap-3 md:grid-cols-3">
+            <Metric label="Main Flow" value="Practice" />
+            <Metric label="Multiplayer" value="Race" />
+            <Metric label="Progress" value="Profile" />
+          </div>
+        </div>
+      </Panel>
+
+      <div className="grid gap-4 xl:grid-cols-2">
+        {guideSections.map((section) => (
+          <Panel title={section.title} icon={section.icon} key={section.title}>
+            <div className="space-y-3">
+              {section.items.map((item, index) => (
+                <div className="grid grid-cols-[32px_1fr] gap-3 rounded-lg border border-line bg-surface/70 p-3" key={item}>
+                  <div className="flex h-8 w-8 items-center justify-center rounded-lg bg-mint font-mono text-sm font-black text-white">
+                    {index + 1}
+                  </div>
+                  <p className="text-sm font-semibold leading-6 text-muted">{item}</p>
+                </div>
+              ))}
+            </div>
+          </Panel>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProgressCoach({
+  analytics,
+  currentView,
+  dailyChallenge,
+  friends,
+  leaderboard,
+  practiceHistory,
+  profile,
+  showPageTip = true,
+  showRecentActivity = true,
+  user,
+  onUseSuggestion
+}: {
+  analytics: AnalyticsSummary;
+  currentView: ActiveView;
+  dailyChallenge: DailyChallengeSummary | null;
+  friends: FriendsSummary | null;
+  leaderboard: LeaderboardSummary | null;
+  practiceHistory: PracticeHistoryItem[];
+  profile: LeaderboardUser | null;
+  showPageTip?: boolean;
+  showRecentActivity?: boolean;
+  user: ClientUser;
+  onUseSuggestion: (mode: PracticeMode, difficulty: PracticeDifficulty, duration: number) => void;
+}) {
+  const nextAchievement = nextAchievementForProfile(profile);
+  const suggestion = practiceSuggestion(analytics, practiceHistory, profile);
+  const activities = showRecentActivity ? recentActivities(practiceHistory, analytics) : [];
+  const pageHint = showPageTip ? coachHintForView(currentView, { dailyChallenge, friends, leaderboard }) : "";
+
+  return (
+    <div className="space-y-4">
+      <Panel title="Next Up" icon={<Sparkles className="h-4 w-4" />}>
+        <div className="rounded-lg border border-line bg-surface/75 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-black uppercase text-muted">Next achievement</div>
+              <div className="mt-1 text-lg font-black">{nextAchievement.title}</div>
+            </div>
+            <Award className="h-5 w-5 text-brass" />
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-line">
+            <div className="h-full rounded-full bg-mint transition-all duration-500" style={{ width: `${nextAchievement.percent}%` }} />
+          </div>
+          <div className="mt-2 flex justify-between gap-3 text-xs font-bold uppercase text-muted">
+            <span>{nextAchievement.currentLabel}</span>
+            <span>{nextAchievement.targetLabel}</span>
+          </div>
+          <p className="mt-3 text-sm font-semibold leading-6 text-muted">{nextAchievement.description}</p>
+        </div>
+
+        <div className="mt-3 rounded-lg border border-line bg-surface/75 p-4">
+          <div className="text-xs font-black uppercase text-muted">Suggested practice</div>
+          <div className="mt-1 text-lg font-black">{suggestion.title}</div>
+          <p className="mt-2 text-sm font-semibold leading-6 text-muted">{suggestion.reason}</p>
+          <button className={`${secondaryButton} mt-3`} onClick={() => onUseSuggestion(suggestion.mode, suggestion.difficulty, suggestion.duration)}>
+            <Target className="h-4 w-4" /> Use Suggestion
+          </button>
+        </div>
+      </Panel>
+
+      {showRecentActivity && (
+        <Panel title="Recent Activity" icon={<History className="h-4 w-4" />}>
+          <div className="space-y-2">
+            {activities.map((activity) => (
+              <div className="rounded-lg border border-line bg-surface/70 p-3" key={activity.id}>
+                <div className="flex items-center justify-between gap-3">
+                  <span className="text-sm font-black">{activity.title}</span>
+                  <span className="font-mono text-sm font-black text-mint">{activity.value}</span>
+                </div>
+                <div className="mt-1 text-xs font-semibold text-muted">{activity.detail}</div>
+              </div>
+            ))}
+            {!activities.length && (
+              <div className="rounded-lg border border-dashed border-line bg-surface/55 p-4 text-sm font-semibold text-muted">
+                Finish a practice test or race and your recent results will appear here.
+              </div>
+            )}
+          </div>
+        </Panel>
+      )}
+
+      {showPageTip && (
+        <Panel title="Page Tip" icon={<BookOpen className="h-4 w-4" />}>
+          <div className="rounded-lg border border-line bg-surface/70 p-3 text-sm font-semibold leading-6 text-muted">
+            {pageHint}
+          </div>
+          <div className="mt-3 grid grid-cols-2 gap-2">
+            <Metric label="You" value={user.username} />
+            <Metric label="Rating" value={String(user.rating)} />
+          </div>
+        </Panel>
+      )}
+    </div>
+  );
+}
+
+function SettingsView({
+  theme,
+  themeShade,
+  quietMistakes,
+  errorLockMode,
+  paceTargetEnabled,
+  paceTarget,
+  autoFocusTyping,
+  finishEffects,
+  deleteAccountConfirming,
+  deleteAccountText,
+  onThemeChange,
+  onThemeShadeChange,
+  onQuietMistakesChange,
+  onErrorLockModeChange,
+  onPaceTargetEnabledChange,
+  onPaceTargetChange,
+  onAutoFocusTypingChange,
+  onFinishEffectsChange,
+  onLogout,
+  onStartDelete,
+  onCancelDelete,
+  onDeleteTextChange,
+  onDeleteAccount
+}: {
+  theme: Theme;
+  themeShade: ThemeShade;
+  quietMistakes: boolean;
+  errorLockMode: ErrorLockMode;
+  paceTargetEnabled: boolean;
+  paceTarget: number;
+  autoFocusTyping: boolean;
+  finishEffects: boolean;
+  deleteAccountConfirming: boolean;
+  deleteAccountText: string;
+  onThemeChange: (theme: Theme) => void;
+  onThemeShadeChange: (shade: ThemeShade) => void;
+  onQuietMistakesChange: (enabled: boolean) => void;
+  onErrorLockModeChange: (mode: ErrorLockMode) => void;
+  onPaceTargetEnabledChange: (enabled: boolean) => void;
+  onPaceTargetChange: (value: number) => void;
+  onAutoFocusTypingChange: (enabled: boolean) => void;
+  onFinishEffectsChange: (enabled: boolean) => void;
+  onLogout: () => void;
+  onStartDelete: () => void;
+  onCancelDelete: () => void;
+  onDeleteTextChange: (value: string) => void;
+  onDeleteAccount: () => void;
+}) {
+  return (
+    <div className="space-y-4">
+      <Panel title="Settings" icon={<Settings className="h-4 w-4" />}>
+        <section className="rounded-lg border border-line bg-surface/70 p-4">
+          <h3 className="mb-3 flex items-center gap-2 text-sm font-black uppercase text-muted">
+            <Palette className="h-4 w-4" /> Appearance
+          </h3>
+          <div className="grid grid-cols-2 gap-2">
+            <button className={controlButton(theme === "light")} onClick={() => onThemeChange("light")}>
+              <Sun className="h-4 w-4" /> Light
+            </button>
+            <button className={controlButton(theme === "dark")} onClick={() => onThemeChange("dark")}>
+              <Moon className="h-4 w-4" /> Dark
+            </button>
+          </div>
+          <div className="mt-4 grid grid-cols-2 gap-2 sm:grid-cols-3 xl:grid-cols-4">
+            {themeShades.map((shade) => (
+              <button
+                className={controlButton(themeShade === shade.value)}
+                key={shade.value}
+                onClick={() => onThemeShadeChange(shade.value)}
+              >
+                <span className="h-4 w-4 rounded-full border border-line" style={{ background: shade.color }} />
+                {shade.label}
+              </button>
+            ))}
+          </div>
+        </section>
+      </Panel>
+
+      <Panel title="Typing Preferences" icon={<Keyboard className="h-4 w-4" />}>
+        <div className="space-y-3">
+          <SettingRow
+            icon={<Eye className="h-4 w-4" />}
+            title="Mistake visibility"
+            description="Keep wrong letters visually calm when you want to focus on rhythm first."
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <button className={controlButton(!quietMistakes)} onClick={() => onQuietMistakesChange(false)}>Show</button>
+              <button className={controlButton(quietMistakes)} onClick={() => onQuietMistakesChange(true)}>Hide</button>
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            icon={<Lock className="h-4 w-4" />}
+            title="Correction lock"
+            description="Choose how strongly the app should stop you when a mistake needs fixing."
+          >
+            <div className="grid grid-cols-3 gap-2">
+              {(["off", "word", "letter"] as ErrorLockMode[]).map((mode) => (
+                <button className={controlButton(errorLockMode === mode)} key={mode} onClick={() => onErrorLockModeChange(mode)}>
+                  {titleCase(mode)}
+                </button>
+              ))}
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            icon={<Gauge className="h-4 w-4" />}
+            title="Pace goal"
+            description="Set a personal WPM target so practice has a clear speed line."
+          >
+            <input
+              className="mb-2 w-full rounded-lg border border-line bg-panel/85 px-3 py-2 font-mono font-black outline-none ring-mint/30 transition focus:ring-4"
+              max={250}
+              min={10}
+              type="number"
+              value={paceTarget}
+              onChange={(event) => onPaceTargetChange(Number(event.target.value))}
+            />
+            <div className="grid grid-cols-2 gap-2">
+              <button className={controlButton(!paceTargetEnabled)} onClick={() => onPaceTargetEnabledChange(false)}>Off</button>
+              <button className={controlButton(paceTargetEnabled)} onClick={() => onPaceTargetEnabledChange(true)}>Custom</button>
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            icon={<Target className="h-4 w-4" />}
+            title="Typing focus"
+            description="Automatically place the cursor into the typing area when a practice run or race starts."
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <button className={controlButton(autoFocusTyping)} onClick={() => onAutoFocusTypingChange(true)}>On</button>
+              <button className={controlButton(!autoFocusTyping)} onClick={() => onAutoFocusTypingChange(false)}>Off</button>
+            </div>
+          </SettingRow>
+
+          <SettingRow
+            icon={<Sparkles className="h-4 w-4" />}
+            title="Finish animation"
+            description="Show the clean completion overlay after strong runs and finished races."
+          >
+            <div className="grid grid-cols-2 gap-2">
+              <button className={controlButton(finishEffects)} onClick={() => onFinishEffectsChange(true)}>On</button>
+              <button className={controlButton(!finishEffects)} onClick={() => onFinishEffectsChange(false)}>Off</button>
+            </div>
+          </SettingRow>
+        </div>
+      </Panel>
+
+      <Panel title="Account" icon={<Users className="h-4 w-4" />}>
+        <div className="grid gap-3 md:grid-cols-2">
+          <button className={secondaryButton} onClick={onLogout}>
+            <LogOut className="h-4 w-4" /> Logout
+          </button>
+          <button className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-coral bg-coral px-3 py-2 font-bold text-white shadow-soft transition hover:brightness-105" onClick={onStartDelete}>
+            <Trash2 className="h-4 w-4" /> Delete Account
+          </button>
+        </div>
+
+        {deleteAccountConfirming && (
+          <div className="mt-4 rounded-lg border border-coral bg-surface/80 p-4">
+            <h3 className="text-base font-black text-coral">Delete account permanently?</h3>
+            <p className="mt-2 text-sm font-medium text-muted">
+              This will delete your account, practice sessions, race participation, keystrokes, achievements, friend requests, and rating history. This cannot be undone.
+            </p>
+            <label className="mt-4 block text-xs font-black uppercase text-muted">Type DELETE to confirm</label>
+            <input className={field} value={deleteAccountText} onChange={(event) => onDeleteTextChange(event.target.value)} placeholder="DELETE" />
+            <div className="grid gap-2 sm:grid-cols-2">
+              <button className={secondaryButton} onClick={onCancelDelete}>Cancel</button>
+              <button
+                className="inline-flex w-full items-center justify-center gap-2 rounded-lg border border-coral bg-coral px-3 py-2 font-bold text-white shadow-soft transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60"
+                disabled={deleteAccountText !== "DELETE"}
+                onClick={onDeleteAccount}
+              >
+                <Trash2 className="h-4 w-4" /> Permanently Delete
+              </button>
+            </div>
+          </div>
+        )}
+      </Panel>
+    </div>
+  );
+}
+
 function DailyChallengeView({
   challenge,
   typed,
@@ -1662,6 +2248,7 @@ function DailyChallengeView({
   metrics,
   remaining,
   running,
+  quietMistakes,
   inputRef,
   onKeyDown,
   onStart,
@@ -1673,6 +2260,7 @@ function DailyChallengeView({
   metrics: { wpm: number; accuracy: number; consistency: number; score: number; errors: number };
   remaining: number;
   running: boolean;
+  quietMistakes: boolean;
   inputRef: React.RefObject<HTMLDivElement | null>;
   onKeyDown: (event: React.KeyboardEvent<HTMLDivElement>) => void;
   onStart: () => void;
@@ -1683,6 +2271,21 @@ function DailyChallengeView({
 
   return (
     <div className="space-y-4">
+      <Panel title="Daily Rules" icon={<CalendarDays className="h-4 w-4" />}>
+        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
+          <Metric label="Time" value={formatDuration(challenge?.durationSeconds ?? 60)} />
+          <Metric label="Entries" value={String(leaderboard.length)} />
+          <Metric label="Best WPM" value={String(challenge?.myEntry?.wpm ?? 0)} />
+          <Metric label="Best Score" value={String(challenge?.myEntry?.score ?? 0)} />
+        </div>
+        <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-semibold text-muted">
+          One fixed prompt is shared by everyone each day. You can replay it, but only your best score stays on today&apos;s leaderboard.
+        </div>
+        <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-semibold text-muted">
+          <kbd className={kbdClass}>Esc</kbd> restarts the current daily run.
+        </div>
+      </Panel>
+
       <Panel title="Daily Challenge" icon={<CalendarDays className="h-4 w-4" />}>
         <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface/75 p-4">
           <div>
@@ -1721,6 +2324,7 @@ function DailyChallengeView({
           code={false}
           focusIndex={typed.length}
           active={running}
+          quietMistakes={quietMistakes}
           onKeyDown={onKeyDown}
         />
       </Panel>
@@ -1828,8 +2432,9 @@ const TypingText = React.forwardRef<HTMLDivElement, {
   code: boolean;
   focusIndex?: number;
   active?: boolean;
+  quietMistakes?: boolean;
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
-}>(function TypingText({ prompt, typed, code, focusIndex = 0, active = false, onKeyDown }, ref) {
+}>(function TypingText({ prompt, typed, code, focusIndex = 0, active = false, quietMistakes = false, onKeyDown }, ref) {
   const safePrompt = prompt ?? "";
   const windowStart = focusIndex > 260 ? Math.max(0, focusIndex - 160) : 0;
   const windowEnd = Math.min(safePrompt.length, Math.max(900, focusIndex + 740));
@@ -1846,7 +2451,7 @@ const TypingText = React.forwardRef<HTMLDivElement, {
     >
       {visiblePrompt ? visiblePrompt.split("").map((char, visibleIndex) => {
         const index = windowStart + visibleIndex;
-        const state = index < typed.length ? (typed[index] === char ? "done" : "wrong") : index === typed.length ? "current" : "";
+        const state = index < typed.length ? (typed[index] === char || quietMistakes ? "done" : "wrong") : index === typed.length ? "current" : "";
         return <span className={state} key={`${char}-${index}`}>{char}</span>;
       }) : <span className="text-muted">Choose a practice format and start typing.</span>}
     </div>
@@ -1957,6 +2562,19 @@ function normalizeAnalytics(value: Partial<AnalyticsSummary> | null | undefined)
   };
 }
 
+function isThemeShade(value: string | null): value is ThemeShade {
+  return themeShades.some((shade) => shade.value === value);
+}
+
+function isErrorLockMode(value: string | null): value is ErrorLockMode {
+  return value === "off" || value === "word" || value === "letter";
+}
+
+function clampNumber(value: number, min: number, max: number) {
+  if (!Number.isFinite(value)) return min;
+  return Math.max(min, Math.min(max, Math.floor(value)));
+}
+
 function tab(active: boolean) {
   return `flex flex-1 items-center justify-center gap-2 rounded-lg border px-3 py-2 text-sm font-bold transition ${active ? "border-ink bg-ink text-panel shadow-soft" : "border-line bg-surface/75 hover:bg-surface"}`;
 }
@@ -1988,6 +2606,95 @@ const codeLanguages: { value: CodeLanguage; label: string }[] = [
   { value: "PYTHON", label: "Python" },
   { value: "JAVA", label: "Java" },
   { value: "SQL", label: "SQL" }
+];
+
+const themeShades: { value: ThemeShade; label: string; color: string }[] = [
+  { value: "mint", label: "Mint", color: "#2f8f83" },
+  { value: "ocean", label: "Ocean", color: "#4169a8" },
+  { value: "violet", label: "Violet", color: "#7c5cc4" },
+  { value: "rose", label: "Rose", color: "#c65f7a" },
+  { value: "amber", label: "Amber", color: "#b88932" },
+  { value: "forest", label: "Forest", color: "#3f7f4f" },
+  { value: "slate", label: "Slate", color: "#607080" },
+  { value: "crimson", label: "Crimson", color: "#b84848" },
+  { value: "indigo", label: "Indigo", color: "#4f5fb8" },
+  { value: "lime", label: "Lime", color: "#6f9f3f" },
+  { value: "cyan", label: "Cyan", color: "#2b9eb3" },
+  { value: "orchid", label: "Orchid", color: "#a8559b" }
+];
+
+const achievementMilestones: {
+  code: string;
+  title: string;
+  description: string;
+  target: number;
+  current: (profile: LeaderboardUser) => number;
+  format: (value: number) => string;
+}[] = [
+  {
+    code: "TESTS_10",
+    title: "Ten Test Foundation",
+    description: "Complete 10 saved typing tests.",
+    target: 10,
+    current: (profile) => profile.practiceTestsDone + profile.racesDone,
+    format: (value) => `${value} tests`
+  },
+  {
+    code: "TESTS_50",
+    title: "Fifty Test Habit",
+    description: "Complete 50 saved typing tests.",
+    target: 50,
+    current: (profile) => profile.practiceTestsDone + profile.racesDone,
+    format: (value) => `${value} tests`
+  },
+  {
+    code: "TIME_100_MIN",
+    title: "Hundred Minute Mark",
+    description: "Log 100 minutes of typing time.",
+    target: 100,
+    current: (profile) => Math.floor(profile.totalTypingSeconds / 60),
+    format: (value) => `${value} min`
+  },
+  {
+    code: "TIME_500_MIN",
+    title: "Five Hundred Minutes",
+    description: "Log 500 minutes of typing time.",
+    target: 500,
+    current: (profile) => Math.floor(profile.totalTypingSeconds / 60),
+    format: (value) => `${value} min`
+  },
+  {
+    code: "BEST_50_WPM",
+    title: "Personal Speed 50",
+    description: "Reach a saved best of 50 WPM.",
+    target: 50,
+    current: (profile) => profile.bestWpm,
+    format: (value) => `${value} WPM`
+  },
+  {
+    code: "BEST_75_WPM",
+    title: "Personal Speed 75",
+    description: "Reach a saved best of 75 WPM.",
+    target: 75,
+    current: (profile) => profile.bestWpm,
+    format: (value) => `${value} WPM`
+  },
+  {
+    code: "DAILY_7",
+    title: "Weekly Challenger",
+    description: "Complete 7 daily challenges.",
+    target: 7,
+    current: (profile) => profile.achievements.some((achievement) => achievement.code === "DAILY_7") ? 7 : 0,
+    format: (value) => `${value} daily`
+  },
+  {
+    code: "AVG_ACCURACY_95",
+    title: "Reliable Accuracy",
+    description: "Hold at least 95% average accuracy after 20 saved tests.",
+    target: 95,
+    current: (profile) => profile.practiceTestsDone + profile.racesDone >= 20 ? Math.round(profile.averageAccuracy) : 0,
+    format: (value) => `${value}%`
+  }
 ];
 
 const minuteOptions = Array.from({ length: 16 }, (_, index) => index);
@@ -2183,10 +2890,138 @@ function formatCodeLanguage(language: CodeLanguage) {
   return codeLanguages.find((item) => item.value === language)?.label ?? "C++";
 }
 
+function avgNumber(values: number[]) {
+  if (!values.length) return 0;
+  return values.reduce((sum, value) => sum + value, 0) / values.length;
+}
+
+function nextAchievementForProfile(profile: LeaderboardUser | null) {
+  if (!profile) {
+    return {
+      title: "Build Your First Milestone",
+      description: "Finish a few saved tests so Velocity Keys can start tracking long-term progress.",
+      currentLabel: "0",
+      targetLabel: "10 tests",
+      percent: 0
+    };
+  }
+
+  const earned = new Set(profile.achievements.map((achievement) => achievement.code));
+  const candidates = achievementMilestones.map((milestone) => {
+    const current = milestone.current(profile);
+    return {
+      ...milestone,
+      current,
+      percent: Math.min(100, Math.round((current / milestone.target) * 100))
+    };
+  });
+  const next = candidates.find((milestone) => !earned.has(milestone.code) && milestone.current < milestone.target) ?? candidates.at(-1);
+  if (!next) {
+    return {
+      title: "All Milestones Clear",
+      description: "You have unlocked every tracked milestone in this build.",
+      currentLabel: "done",
+      targetLabel: "done",
+      percent: 100
+    };
+  }
+  return {
+    title: next.title,
+    description: next.description,
+    currentLabel: next.format(next.current),
+    targetLabel: next.format(next.target),
+    percent: next.percent
+  };
+}
+
+function practiceSuggestion(analytics: AnalyticsSummary, history: PracticeHistoryItem[], profile: LeaderboardUser | null) {
+  const latest = history[0];
+  const weakLetter = analytics.weakLetters[0]?.token?.toUpperCase();
+  const weakWord = analytics.weakWords[0]?.token;
+  if (weakWord || weakLetter) {
+    return {
+      title: "Adaptive · Medium · 2 min",
+      reason: `Focus on ${weakWord ? `the word "${weakWord}"` : `the letter ${weakLetter}`} while keeping corrections controlled.`,
+      mode: "ADAPTIVE" as PracticeMode,
+      difficulty: "MEDIUM" as PracticeDifficulty,
+      duration: 120
+    };
+  }
+  if (latest && latest.accuracy < 92) {
+    return {
+      title: "Quote · Easy · 1 min",
+      reason: "Your last saved run lost points on accuracy, so use a calmer text before pushing speed again.",
+      mode: "QUOTE" as PracticeMode,
+      difficulty: "EASY" as PracticeDifficulty,
+      duration: 60
+    };
+  }
+  if ((profile?.practiceTestsDone ?? history.length) >= 10) {
+    return {
+      title: "Code · Medium · 2 min",
+      reason: "You have enough baseline tests now; code typing adds symbols and structure for a stronger resume demo.",
+      mode: "CODE" as PracticeMode,
+      difficulty: "MEDIUM" as PracticeDifficulty,
+      duration: 120
+    };
+  }
+  return {
+    title: "Words · Medium · 1 min",
+    reason: "Build a clean baseline first. A few short word tests will unlock better trends and suggestions.",
+    mode: "WORDS" as PracticeMode,
+    difficulty: "MEDIUM" as PracticeDifficulty,
+    duration: 60
+  };
+}
+
+function recentActivities(history: PracticeHistoryItem[], analytics: AnalyticsSummary) {
+  const practiceActivities = history.slice(0, 4).map((item) => ({
+    id: `practice-${item.id}`,
+    date: item.createdAt,
+    title: `${formatModeLabel(item.mode)} practice`,
+    value: `${item.wpm} WPM`,
+    detail: `${item.accuracy}% accuracy · ${item.score} score · ${new Date(item.createdAt).toLocaleDateString()}`
+  }));
+  const raceActivities = analytics.recentRaces.slice(0, 4).map((race) => ({
+    id: `race-${race.id}-${race.date}`,
+    date: race.date,
+    title: race.placement ? `Race finish #${race.placement}` : "Race finish",
+    value: `${race.wpm} WPM`,
+    detail: `${race.accuracy}% accuracy · ${new Date(race.date).toLocaleDateString()}`
+  }));
+  return [...practiceActivities, ...raceActivities]
+    .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+    .slice(0, 5);
+}
+
+function coachHintForView(currentView: ActiveView, context: { dailyChallenge: DailyChallengeSummary | null; friends: FriendsSummary | null; leaderboard: LeaderboardSummary | null }) {
+  if (currentView === "leaderboard") return `There are ${context.leaderboard?.users.length ?? 0} users in this leaderboard view. Open a profile row to compare detailed stats.`;
+  if (currentView === "friends") return `You have ${context.friends?.incoming.length ?? 0} incoming requests and ${context.friends?.friends.length ?? 0} accepted friends.`;
+  if (currentView === "daily") return context.dailyChallenge?.myEntry ? "Your best daily run is saved. Try again only if you can beat the score." : "Complete today's shared challenge to enter the daily leaderboard.";
+  if (currentView === "race") return "Create a room, share the invite link, and wait for every racer to press ready before the countdown starts.";
+  if (currentView === "history") return "History is useful for spotting which mode gives your best score and which one needs practice.";
+  if (currentView === "profile") return "Profile combines race and practice data, so both solo work and multiplayer results improve the story.";
+  if (currentView === "settings") return "Settings change how typing feels: mistake visibility, correction lock, pace target, focus, and finish animation.";
+  if (currentView === "help") return "Use this page as the app manual when you forget what each feature does.";
+  return "Start with a clean one-minute practice run, then raise difficulty only when accuracy stays stable.";
+}
+
 function shouldIgnoreShortcut(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName.toLowerCase();
   return tag === "input" || tag === "select" || tag === "textarea" || target.isContentEditable;
+}
+
+function shouldBlockTyping(mode: ErrorLockMode, typed: string, target: string, nextKey: string) {
+  if (mode === "off") return false;
+  const expected = target[typed.length] ?? "";
+  if (mode === "letter") return Boolean(expected) && nextKey !== expected;
+  if (nextKey !== " " && nextKey !== "\n") return false;
+  const wordStart = Math.max(typed.lastIndexOf(" "), typed.lastIndexOf("\n")) + 1;
+  for (let index = wordStart; index < typed.length; index += 1) {
+    if (typed[index] !== target[index]) return true;
+  }
+  return false;
 }
 
 function pickVocabulary(difficulty: PracticeDifficulty, count: number) {

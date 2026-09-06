@@ -37,6 +37,7 @@ export type RaceSnapshot = {
   raceId: string;
   prompt: string;
   isPrivate: boolean;
+  isDuel?: boolean;
   status: "WAITING" | "COUNTDOWN" | "LIVE" | "FINISHED" | "CANCELLED";
   startsAt?: number;
   endsAt?: number;
