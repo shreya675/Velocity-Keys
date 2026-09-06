@@ -958,7 +958,7 @@ export default function Home() {
       <ToastStack toasts={toasts} />
       {celebrate && <FinishCelebration />}
       {snapshot?.status === "COUNTDOWN" && <RaceCountdownOverlay countdown={countdown} />}
-      <header className="glass-panel mx-auto mb-6 flex max-w-[1500px] flex-wrap items-center justify-between gap-4 rounded-lg border border-line bg-panel/80 px-5 py-5 shadow-soft backdrop-blur-xl">
+      <header className="glass-panel mx-auto mb-6 flex max-w-[1500px] flex-col gap-5 rounded-lg border border-line bg-panel/80 px-5 py-5 shadow-soft backdrop-blur-xl">
         <div>
           <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-line bg-surface/70 px-3 py-1 text-xs font-black uppercase text-muted">
             <Sparkles className="h-3.5 w-3.5 text-brass" /> Real-time Typing Arena
@@ -968,7 +968,7 @@ export default function Home() {
           </div>
           <p className="mt-1 text-base font-semibold text-muted md:text-lg">{user.username} · {user.rating} ELO · {levelForRating(user.rating)}</p>
         </div>
-        <div className="flex flex-wrap gap-2">
+        <nav className="grid w-full grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-9">
           <button className={activeView === "practice" ? activeCompactButton : compactButton} onClick={() => { setActiveView("practice"); void loadPractice(); }}><Target className="h-4 w-4" /> Practice</button>
           <button className={activeView === "race" ? activeCompactButton : compactButton} onClick={() => setActiveView("race")}><Users className="h-4 w-4" /> Race</button>
           <button className={activeView === "daily" ? activeCompactButton : compactButton} onClick={() => { setActiveView("daily"); void loadDailyChallenge(); }}><CalendarDays className="h-4 w-4" /> Daily</button>
@@ -992,7 +992,7 @@ export default function Home() {
           <button className={activeView === "profile" ? activeCompactButton : compactButton} onClick={() => { setActiveView("profile"); void loadProfile(); }}><Users className="h-4 w-4" /> Profile</button>
           <button className={activeView === "settings" ? activeCompactButton : compactButton} onClick={() => setActiveView("settings")}><Settings className="h-4 w-4" /> Settings</button>
           <button className={activeView === "help" ? activeCompactButton : compactButton} onClick={() => setActiveView("help")}><BookOpen className="h-4 w-4" /> How To Use</button>
-        </div>
+        </nav>
       </header>
 
       <section className={`mx-auto grid max-w-[1500px] gap-4 ${activeView === "leaderboard" || activeView === "history" || activeView === "settings" || activeView === "help" || activeView === "friends" || activeView === "daily" || activeView === "profile" ? "" : "xl:grid-cols-[minmax(0,1fr)_380px]"}`}>
@@ -3049,7 +3049,7 @@ const timerSelect = "mt-1 h-44 w-full overflow-y-auto rounded-lg border border-l
 const primaryButton = "inline-flex w-full items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-3 py-2 font-bold text-white shadow-glow transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:brightness-100";
 const secondaryButton = "inline-flex w-full items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-3 py-2 font-bold transition hover:bg-surface hover:shadow-soft disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-surface/75 disabled:hover:shadow-none";
 const activeControl = "inline-flex w-full items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-3 py-2 font-bold text-white shadow-glow";
-const compactButton = "inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-4 py-2 font-bold transition hover:bg-surface hover:shadow-soft";
-const activeCompactButton = "inline-flex items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-4 py-2 font-bold text-white shadow-glow";
+const compactButton = "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-4 py-2 text-center font-bold transition hover:bg-surface hover:shadow-soft";
+const activeCompactButton = "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-4 py-2 text-center font-bold text-white shadow-glow";
 const iconButton = "inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-surface/75 transition hover:bg-surface hover:shadow-soft";
 const kbdClass = "mx-1 inline-flex min-w-9 items-center justify-center rounded border border-line bg-panel/90 px-2 py-1 font-mono text-xs font-black text-ink shadow-sm";
