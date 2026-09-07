@@ -39,11 +39,19 @@ export function practiceRatingDelta(input: { score: number; errors: number; accu
   return Math.max(-35, Math.min(70, Math.round(raw)));
 }
 
-export function practiceScore(input: { wpm: number; accuracy: number; consistency: number; durationSeconds: number; errors?: number; currentRating?: number; difficulty?: PracticeDifficulty }) {
+export function practiceScore(input: { wpm: number; accuracy: number; consistency: number; durationSeconds: number; errors?: number; currentRating?: number; difficulty?: PracticeDifficulty; typedChars?: number; promptLength?: number }) {
+  const typedChars = input.typedChars ?? 0;
+  const promptLength = Math.max(input.promptLength ?? typedChars, 1);
+  const progress = Math.max(0, Math.min(1, typedChars / promptLength));
+  if (typedChars < 5 || input.accuracy <= 0 || input.wpm <= 0) return 0;
+
   const durationBonus = input.durationSeconds >= 120 ? 1.12 : input.durationSeconds >= 60 ? 1 : 0.86;
   const difficultyMultiplier = difficultyMultiplierFor(input.difficulty);
-  const base = (input.wpm * 9 + input.accuracy * 5 + input.consistency * 3) * durationBonus * difficultyMultiplier;
-  const penalty = (input.errors ?? 0) * errorPenaltyForRating(input.currentRating ?? 0) * difficultyMultiplier;
+  const accuracyFactor = Math.pow(Math.max(0, input.accuracy) / 100, 2.2);
+  const consistencyFactor = 0.75 + Math.max(0, input.consistency) / 400;
+  const progressFactor = Math.max(0.08, Math.pow(progress, 0.85));
+  const base = input.wpm * 18 * accuracyFactor * consistencyFactor * progressFactor * durationBonus * difficultyMultiplier;
+  const penalty = (input.errors ?? 0) * errorPenaltyForRating(input.currentRating ?? 0) * difficultyMultiplier * (1.5 + (1 - progress) * 2.5);
   return Math.max(0, Math.round(base - penalty));
 }
 

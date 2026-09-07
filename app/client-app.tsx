@@ -15,6 +15,7 @@ type ErrorLockMode = "off" | "word" | "letter";
 type LeaderboardScope = "public" | "friends";
 type ToastTone = "info" | "success" | "error";
 type ToastMessage = { id: number; message: string; tone: ToastTone };
+type HeaderNotification = { id: string; title: string; detail: string; date: string; icon: React.ReactNode };
 
 export default function Home() {
   const [token, setToken] = useState<string>("");
@@ -56,7 +57,10 @@ export default function Home() {
   const [friends, setFriends] = useState<FriendsSummary | null>(null);
   const [friendNoticeCount, setFriendNoticeCount] = useState(0);
   const [notificationsOpen, setNotificationsOpen] = useState(false);
+  const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
+  const [liveNotifications, setLiveNotifications] = useState<HeaderNotification[]>([]);
   const [friendUsername, setFriendUsername] = useState("");
+  const [friendRemovalCandidate, setFriendRemovalCandidate] = useState<string | null>(null);
   const [practiceHistory, setPracticeHistory] = useState<PracticeHistoryItem[]>([]);
   const [dailyChallenge, setDailyChallenge] = useState<DailyChallengeSummary | null>(null);
   const [isDailyRunning, setIsDailyRunning] = useState(false);
@@ -167,6 +171,23 @@ export default function Home() {
         window.setTimeout(() => setCelebrate(false), 1800);
       }
     });
+    nextSocket.on("matchmaking:matched", (nextSnapshot: RaceSnapshot) => {
+      const nextRaceMode = nextSnapshot.raceMode ?? "WORDS";
+      setSnapshot(nextSnapshot);
+      setActiveView("race");
+      setTyped("");
+      setRoomCode(nextSnapshot.roomCode);
+      setRoomVisibility(nextSnapshot.isPrivate ? "private" : "public");
+      setRaceDifficulty(nextSnapshot.difficulty);
+      setRaceDuration(nextSnapshot.durationSeconds);
+      setRaceMode(nextRaceMode);
+      setTextMode(textModeForPracticeMode(nextRaceMode));
+      raceStartedAtRef.current = 0;
+      lastStrokeAtRef.current = 0;
+      setRaceStartedAt(0);
+      setLastStrokeAt(0);
+      showToast("Quick Duel found. Press Start Race when you are ready.", "success");
+    });
     nextSocket.on("friend:request", (request: FriendRequestSummary) => {
       setFriends((current) => {
         if (!current) return current;
@@ -176,11 +197,44 @@ export default function Home() {
       setFriendNoticeCount((count) => count + 1);
       showToast(`${request.requester.username} sent you a friend request.`, "info");
     });
+    nextSocket.on("friend:accepted", (payload: { request: FriendRequestSummary; acceptedBy: { username: string } }) => {
+      setLiveNotifications((items) => [
+        {
+          id: `friend-accepted-${payload.request.id}`,
+          title: "Friend request accepted",
+          detail: `${payload.acceptedBy.username} accepted your friend request.`,
+          date: payload.request.respondedAt ?? new Date().toISOString(),
+          icon: <Check className="h-4 w-4 text-mint" />
+        },
+        ...items.filter((item) => item.id !== `friend-accepted-${payload.request.id}`)
+      ].slice(0, 8));
+      setFriendNoticeCount((count) => count + 1);
+      showToast(`${payload.acceptedBy.username} accepted your friend request.`, "success");
+      void api<ApiResult<FriendsSummary>>("/api/friends", { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }).then((result) => {
+        if (!result.error) setFriends(result);
+      });
+      if (leaderboardScope === "friends") {
+        void api<ApiResult<LeaderboardSummary>>("/api/leaderboard?scope=friends", { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }).then((result) => {
+          if (!result.error) setLeaderboard(result);
+        });
+      }
+    });
+    nextSocket.on("friend:removed", () => {
+      showToast("A friend removed you from their list.", "info");
+      void api<ApiResult<FriendsSummary>>("/api/friends", { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }).then((result) => {
+        if (!result.error) setFriends(result);
+      });
+      if (leaderboardScope === "friends") {
+        void api<ApiResult<LeaderboardSummary>>("/api/leaderboard?scope=friends", { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }).then((result) => {
+          if (!result.error) setLeaderboard(result);
+        });
+      }
+    });
     setSocket(nextSocket);
     return () => {
       nextSocket.disconnect();
     };
-  }, [autoFocusTyping, finishEffects, showToast, token]);
+  }, [autoFocusTyping, finishEffects, leaderboardScope, showToast, token]);
 
   useEffect(() => {
     const id = window.setInterval(() => setClock(Date.now()), 250);
@@ -209,11 +263,22 @@ export default function Home() {
         date: achievement.earnedAt,
         icon: <Award className="h-4 w-4 text-brass" />
       }));
-    return [...friendItems, ...achievementItems]
+    return [...liveNotifications, ...friendItems, ...achievementItems]
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .filter((notification) => !dismissedNotificationIds.includes(notification.id))
       .slice(0, 5);
-  }, [friends?.incoming, myProfile?.achievements]);
-  const notificationCount = Math.min(9, friendNoticeCount + (friends?.incoming.length ?? 0));
+  }, [dismissedNotificationIds, friends?.incoming, liveNotifications, myProfile?.achievements]);
+  const notificationCount = Math.min(9, headerNotifications.length);
+
+  useEffect(() => {
+    if (!notificationsOpen || !headerNotifications.length) return;
+    const seenIds = headerNotifications.map((notification) => notification.id);
+    const timeoutId = window.setTimeout(() => {
+      setDismissedNotificationIds((current) => Array.from(new Set([...current, ...seenIds])).slice(-80));
+      setLiveNotifications((items) => items.filter((item) => !seenIds.includes(item.id)));
+    }, 7000);
+    return () => window.clearTimeout(timeoutId);
+  }, [headerNotifications, notificationsOpen]);
   const target = activeView === "race" ? snapshot?.prompt ?? "" : activeView === "daily" ? dailyChallenge?.prompt ?? "" : practicePrompt;
   const finished = Boolean(snapshot && typed === snapshot.prompt);
   const countdown = snapshot?.startsAt ? Math.max(0, Math.ceil((snapshot.startsAt - clock) / 1000)) : snapshot?.countdownSeconds ?? 0;
@@ -234,7 +299,7 @@ export default function Home() {
     const wpm = Math.round(calculateWpm(correctChars, elapsedMs));
     const accuracy = Math.round(calculateAccuracy(Math.max(typed.length, 1), errors) * 10) / 10;
     const consistency = Math.round(calculateConsistency(practiceEvents));
-    const score = typed.length ? practiceScore({ wpm, accuracy, consistency, errors, durationSeconds: practiceDuration, currentRating: user?.rating ?? 0, difficulty: practiceDifficulty }) : 0;
+    const score = typed.length ? practiceScore({ wpm, accuracy, consistency, errors, durationSeconds: practiceDuration, currentRating: user?.rating ?? 0, difficulty: practiceDifficulty, typedChars: typed.length, promptLength: target.length }) : 0;
     return { wpm, accuracy, consistency, score, errors };
   }, [isPracticeRunning, practiceDifficulty, practiceDuration, practiceElapsedMs, practiceEvents, target, typed, user?.rating]);
   const dailyDuration = dailyChallenge?.durationSeconds ?? 60;
@@ -247,7 +312,7 @@ export default function Home() {
     const wpm = Math.round(calculateWpm(correctChars, elapsedMs));
     const accuracy = Math.round(calculateAccuracy(Math.max(typed.length, 1), errors) * 10) / 10;
     const consistency = Math.round(calculateConsistency(dailyEvents));
-    const score = typed.length ? practiceScore({ wpm, accuracy, consistency, errors, durationSeconds: dailyDuration, currentRating: user?.rating ?? 0, difficulty: "MEDIUM" }) : 0;
+    const score = typed.length ? practiceScore({ wpm, accuracy, consistency, errors, durationSeconds: dailyDuration, currentRating: user?.rating ?? 0, difficulty: "MEDIUM", typedChars: typed.length, promptLength: target.length }) : 0;
     return { wpm, accuracy, consistency, score, errors };
   }, [dailyDuration, dailyElapsedMs, dailyEvents, isDailyRunning, target, typed, user?.rating]);
 
@@ -382,6 +447,27 @@ export default function Home() {
     if (leaderboardScope === "friends") void loadLeaderboard("friends");
   };
 
+  const removeFriend = async (friendId: string, username: string) => {
+    if (friendRemovalCandidate !== friendId) {
+      setFriendRemovalCandidate(friendId);
+      showToast(`Click remove again to confirm removing ${username}.`, "info");
+      return;
+    }
+    if (!window.confirm(`Remove ${username} from your friends? This cannot be undone.`)) return;
+    const result = await api<ApiResult<FriendsSummary>>(`/api/friends/${friendId}`, {
+      method: "DELETE",
+      headers: authHeaders
+    });
+    if (result.error) {
+      showToast(result.error, "error");
+      return;
+    }
+    setFriends(result);
+    setFriendRemovalCandidate(null);
+    showToast(`${username} removed from friends.`, "success");
+    if (leaderboardScope === "friends") void loadLeaderboard("friends");
+  };
+
   const loadDailyChallenge = useCallback(async () => {
     if (!token) return null;
     const result = await api<ApiResult<DailyChallengeSummary>>("/api/daily-challenge", { headers: authHeaders });
@@ -473,9 +559,6 @@ export default function Home() {
     if (activeView === "leaderboard") {
       void loadLeaderboard(leaderboardScope);
     }
-    if (activeView === "profile") {
-      void loadProfile();
-    }
     if (activeView === "daily") {
       void loadDailyChallenge();
     }
@@ -488,7 +571,7 @@ export default function Home() {
     if (activeView === "race" && roomVisibility === "public" && !raceSettingsLocked) {
       void loadPublicRooms();
     }
-  }, [activeView, leaderboardScope, loadDailyChallenge, loadFriends, loadLeaderboard, loadPracticeHistory, loadProfile, loadPublicRooms, raceSettingsLocked, roomVisibility]);
+  }, [activeView, leaderboardScope, loadDailyChallenge, loadFriends, loadLeaderboard, loadPracticeHistory, loadPublicRooms, raceSettingsLocked, roomVisibility]);
 
   const createRoom = async (isPrivate: boolean) => {
     const result = await api<RaceSnapshot>("/api/rooms", {
@@ -693,6 +776,13 @@ export default function Home() {
   const finishPractice = useCallback(async () => {
     if (!isPracticeRunning || practiceSaved) return;
     setIsPracticeRunning(false);
+    if (typed.length === 0) {
+      setPracticeResult(null);
+      setPracticeSaved(false);
+      setPracticeEvents([]);
+      showToast("No practice result saved because nothing was typed.", "info");
+      return;
+    }
     setPracticeSaved(true);
     const result = await api<PracticeResult>("/api/practice/result", {
       method: "POST",
@@ -725,7 +815,7 @@ export default function Home() {
     void loadAnalytics();
     void loadPracticeHistory();
     void loadMyProfile();
-  }, [authHeaders, finishEffects, isPracticeRunning, loadAnalytics, loadMyProfile, loadPracticeHistory, practiceDifficulty, practiceDuration, practiceEvents, practiceMetrics.accuracy, practiceMetrics.consistency, practiceMetrics.errors, practiceMetrics.wpm, practiceMode, practicePrompt, practiceSaved, showToast, user, vocabularyEntries]);
+  }, [authHeaders, finishEffects, isPracticeRunning, loadAnalytics, loadMyProfile, loadPracticeHistory, practiceDifficulty, practiceDuration, practiceEvents, practiceMetrics.accuracy, practiceMetrics.consistency, practiceMetrics.errors, practiceMetrics.wpm, practiceMode, practicePrompt, practiceSaved, showToast, typed.length, user, vocabularyEntries]);
 
   const finishDailyChallenge = useCallback(async () => {
     if (!dailyChallenge || !isDailyRunning || dailySaved) return;
@@ -1000,6 +1090,7 @@ export default function Home() {
               <button
                 className="font-bold text-ink underline-offset-4 transition hover:text-mint hover:underline"
                 onClick={() => {
+                  setProfileUser(null);
                   setActiveView("profile");
                   void loadProfile();
                 }}
@@ -1079,7 +1170,7 @@ export default function Home() {
           </button>
           <button className={activeView === "leaderboard" ? activeCompactButton : compactButton} onClick={() => setActiveView("leaderboard")}><Trophy className="h-4 w-4" /> Leaderboard</button>
           <button className={activeView === "history" ? activeCompactButton : compactButton} onClick={() => { setActiveView("history"); void loadPracticeHistory(); }}><History className="h-4 w-4" /> History</button>
-          <button className={activeView === "profile" ? activeCompactButton : compactButton} onClick={() => { setActiveView("profile"); void loadProfile(); }}><Users className="h-4 w-4" /> Profile</button>
+          <button className={activeView === "profile" ? activeCompactButton : compactButton} onClick={() => { setProfileUser(null); setActiveView("profile"); void loadProfile(); }}><Users className="h-4 w-4" /> Profile</button>
           <button className={activeView === "settings" ? activeCompactButton : compactButton} onClick={() => setActiveView("settings")}><Settings className="h-4 w-4" /> Settings</button>
           <button className={activeView === "help" ? activeCompactButton : compactButton} onClick={() => setActiveView("help")}><BookOpen className="h-4 w-4" /> How To Use</button>
         </nav>
@@ -1131,6 +1222,8 @@ export default function Home() {
               onUsernameChange={setFriendUsername}
               onSendRequest={sendFriendRequest}
               onRespond={respondToFriendRequest}
+              onRemoveFriend={removeFriend}
+              removalCandidateId={friendRemovalCandidate}
               onOpenProfile={(profileId) => {
                 setActiveView("profile");
                 void loadProfile(profileId);
@@ -1198,7 +1291,7 @@ export default function Home() {
                   </div>
                 )}
               </div>
-            ) : practiceResult ? (
+            ) : activeView === "practice" && practiceResult ? (
               <div className="mb-4 grid gap-2 md:grid-cols-4">
                 <Metric label="Final WPM" value={String(practiceResult.wpm)} />
                 <Metric label="Accuracy" value={`${practiceResult.accuracy}%`} />
@@ -1207,27 +1300,32 @@ export default function Home() {
               </div>
             ) : (
               <div className="mb-4 rounded-lg border border-line bg-surface/75 p-4 text-sm font-semibold text-muted">
-                Start practice to type without live score pressure. Your WPM, accuracy, score, and errors will appear after the session ends.
+                {activeView === "race"
+                  ? "Create a room, join a public room, or start a quick duel from the race lobby."
+                  : "Start practice to type without live score pressure. Your WPM, accuracy, score, and errors will appear after the session ends."}
               </div>
             )}
-            {snapshot?.status === "COUNTDOWN" && <div className="mb-4 animate-pulse bg-ink px-4 py-4 text-center text-5xl font-black text-white">{countdown}</div>}
-            {!snapshot && isPracticeRunning && <div className="mb-4 bg-ink px-4 py-3 text-center text-4xl font-black text-white">{formatDuration(practiceRemaining)}</div>}
-            {!snapshot && (
-              <div className="mb-4 grid gap-2 sm:grid-cols-2">
+            {snapshot?.status === "COUNTDOWN" && <div className="mb-4 animate-pulse rounded-lg border border-mint/45 bg-surface/90 px-4 py-4 text-center font-mono text-5xl font-black text-mint shadow-glow">{countdown}</div>}
+            {!snapshot && isPracticeRunning && <div className="mb-4 rounded-lg border border-mint/45 bg-surface/90 px-4 py-3 text-center font-mono text-4xl font-black text-mint shadow-glow">{formatDuration(practiceRemaining)}</div>}
+            {!snapshot && activeView === "practice" && (
+              <div className="mb-4 grid gap-2 sm:grid-cols-3">
                 <button className={primaryButton} onClick={startPractice}><Play className="h-4 w-4" /> Start Practice</button>
                 <button className={secondaryButton} onClick={startPractice}><Target className="h-4 w-4" /> Restart Practice</button>
+                <button className={secondaryButton} onClick={() => void finishPractice()} disabled={!isPracticeRunning}><Square className="h-4 w-4" /> End Practice</button>
               </div>
             )}
-            <TypingText
-              ref={inputRef}
-              prompt={target}
-              typed={typed}
-              code={snapshot?.raceMode === "CODE" || (!snapshot && practiceMode === "CODE") || raceMode === "CODE"}
-              focusIndex={typed.length}
-              active={Boolean(snapshot ? snapshot.status === "LIVE" : isPracticeRunning)}
-              quietMistakes={quietMistakes}
-              onKeyDown={handleTypeKey}
-            />
+            {(snapshot || activeView === "practice") && (
+              <TypingText
+                ref={inputRef}
+                prompt={target}
+                typed={typed}
+                code={snapshot?.raceMode === "CODE" || (!snapshot && practiceMode === "CODE") || raceMode === "CODE"}
+                focusIndex={typed.length}
+                active={Boolean(snapshot ? snapshot.status === "LIVE" : isPracticeRunning)}
+                quietMistakes={quietMistakes}
+                onKeyDown={handleTypeKey}
+              />
+            )}
             {activeView === "race" ? (
               <div className="mt-4 grid gap-2 sm:grid-cols-3">
                 <button className={primaryButton} onClick={startRace} disabled={!snapshot || snapshot.status !== "WAITING" || amReady}>
@@ -1239,7 +1337,19 @@ export default function Home() {
             ) : (
               null
             )}
-            {practiceResult && !snapshot && (
+            {activeView === "race" && !snapshot && (
+              <div className="mt-4">
+                <TypingText
+                  prompt=""
+                  typed=""
+                  code={raceMode === "CODE"}
+                  active={false}
+                  quietMistakes={quietMistakes}
+                  placeholder="Race text will appear here after you create a room, join a public room, or find a quick duel."
+                />
+              </div>
+            )}
+            {activeView === "practice" && practiceResult && !snapshot && (
               <div className="mt-4 rounded-lg border border-line bg-surface/80 p-4 shadow-soft">
                 {practiceResult.vocabulary?.length ? (
                   <div>
@@ -1374,8 +1484,6 @@ export default function Home() {
                   </select>
                 </>
               )}
-              <button className={primaryButton} onClick={startPractice}><Play className="h-4 w-4" /> Start Practice</button>
-              <button className={`${secondaryButton} mt-2`} onClick={() => void finishPractice()} disabled={!isPracticeRunning}><Square className="h-4 w-4" /> Finish</button>
               <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm">
                 <div className="flex justify-between font-bold"><span>Current level</span><span>{levelForRating(user.rating)}</span></div>
                 <div className="mt-1 text-muted">Rating changes reward clean speed over raw speed.</div>
@@ -1753,6 +1861,8 @@ function FriendsView({
   onUsernameChange,
   onSendRequest,
   onRespond,
+  onRemoveFriend,
+  removalCandidateId,
   onOpenProfile
 }: {
   friends: FriendsSummary | null;
@@ -1760,6 +1870,8 @@ function FriendsView({
   onUsernameChange: (value: string) => void;
   onSendRequest: () => void;
   onRespond: (requestId: string, accept: boolean) => void;
+  onRemoveFriend: (friendId: string, username: string) => void;
+  removalCandidateId: string | null;
   onOpenProfile: (profileId: string) => void;
 }) {
   const accepted = friends?.friends ?? [];
@@ -1834,19 +1946,23 @@ function FriendsView({
 
       <Panel title="My Friends" icon={<Users className="h-4 w-4" />}>
         <div className="overflow-hidden rounded-lg border border-line bg-surface/65">
-          <div className="grid grid-cols-[1fr_110px_140px] gap-3 border-b border-line bg-panel/75 px-3 py-2 text-[11px] font-black uppercase text-muted">
+          <div className="grid grid-cols-[1fr_100px_140px_140px] gap-3 border-b border-line bg-panel/75 px-3 py-2 text-[11px] font-black uppercase text-muted">
             <span>User</span>
             <span className="text-right">Rating</span>
             <span className="text-right">Profile</span>
+            <span className="text-right">Remove</span>
           </div>
           {accepted.map((friend) => (
-            <div className="grid grid-cols-[1fr_110px_140px] items-center gap-3 border-b border-line px-3 py-3 last:border-b-0" key={friend.id}>
+            <div className="grid grid-cols-[1fr_100px_140px_140px] items-center gap-3 border-b border-line px-3 py-3 last:border-b-0" key={friend.id}>
               <span>
                 <span className="block font-black">{friend.username}</span>
                 <span className="block text-xs font-semibold text-muted">{friend.level}</span>
               </span>
               <span className="text-right font-mono font-black">{friend.rating}</span>
               <button className={secondaryButton} onClick={() => onOpenProfile(friend.id)}>Open</button>
+              <button className={removalCandidateId === friend.id ? dangerButton : secondaryButton} onClick={() => onRemoveFriend(friend.id, friend.username)}>
+                {removalCandidateId === friend.id ? "Confirm" : "Remove"}
+              </button>
             </div>
           ))}
           {!accepted.length && (
@@ -2523,8 +2639,9 @@ const TypingText = React.forwardRef<HTMLDivElement, {
   focusIndex?: number;
   active?: boolean;
   quietMistakes?: boolean;
+  placeholder?: string;
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
-}>(function TypingText({ prompt, typed, code, focusIndex = 0, active = false, quietMistakes = false, onKeyDown }, ref) {
+}>(function TypingText({ prompt, typed, code, focusIndex = 0, active = false, quietMistakes = false, placeholder = "Choose a practice format and start typing.", onKeyDown }, ref) {
   const safePrompt = prompt ?? "";
   const windowStart = focusIndex > 260 ? Math.max(0, focusIndex - 160) : 0;
   const windowEnd = Math.min(safePrompt.length, Math.max(900, focusIndex + 740));
@@ -2543,7 +2660,7 @@ const TypingText = React.forwardRef<HTMLDivElement, {
         const index = windowStart + visibleIndex;
         const state = index < typed.length ? (typed[index] === char || quietMistakes ? "done" : "wrong") : index === typed.length ? "current" : "";
         return <span className={state} key={`${char}-${index}`}>{char}</span>;
-      }) : <span className="text-muted">Choose a practice format and start typing.</span>}
+      }) : <span className="text-muted">{placeholder}</span>}
     </div>
   );
 });
@@ -3143,4 +3260,5 @@ const compactButton = "inline-flex min-h-12 w-full items-center justify-center g
 const activeCompactButton = "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-4 py-2 text-center font-bold text-white shadow-glow";
 const authThemeButton = "inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-3 py-2 text-sm font-bold transition hover:bg-surface hover:shadow-soft";
 const iconButton = "inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-surface/75 transition hover:bg-surface hover:shadow-soft";
+const dangerButton = "inline-flex w-full items-center justify-center gap-2 rounded-lg border border-coral bg-coral/15 px-3 py-2 font-bold text-coral transition hover:bg-coral hover:text-white hover:shadow-soft";
 const kbdClass = "mx-1 inline-flex min-w-9 items-center justify-center rounded border border-line bg-panel/90 px-2 py-1 font-mono text-xs font-black text-ink shadow-sm";

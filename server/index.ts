@@ -98,6 +98,13 @@ async function main() {
       difficulty: normalizeDifficulty(req.body.difficulty),
       durationSeconds: normalizeRaceDuration(req.body.durationSeconds)
     });
+    if (snapshot) {
+      snapshot.players.forEach((player) => joinUserSocketsToRoom(io, player.userId, snapshot.roomCode));
+      snapshot.players
+        .filter((player) => player.userId !== req.user!.id)
+        .forEach((player) => emitToUser(io, player.userId, "matchmaking:matched", snapshot));
+      io.to(snapshot.roomCode).emit("race:snapshot", snapshot);
+    }
     res.json({ matched: Boolean(snapshot), snapshot });
   });
 
@@ -170,9 +177,14 @@ async function main() {
       where: { requesterId_addresseeId: { requesterId: targetUser.id, addresseeId: req.user!.id } }
     });
     if (reverseRequest?.status === "PENDING") {
-      await prisma.friendRequest.update({
+      const acceptedRequest = await prisma.friendRequest.update({
         where: { id: reverseRequest.id },
-        data: { status: "ACCEPTED", respondedAt: new Date() }
+        data: { status: "ACCEPTED", respondedAt: new Date() },
+        include: { requester: true, addressee: true }
+      });
+      emitToUser(io, targetUser.id, "friend:accepted", {
+        request: friendRequestSummary(acceptedRequest),
+        acceptedBy: friendUser(acceptedRequest.addressee)
       });
       return res.json(await friendsSummary(req.user!.id));
     }
@@ -195,10 +207,34 @@ async function main() {
       where: { id: req.params.requestId, addresseeId: req.user!.id, status: "PENDING" }
     });
     if (!request) return res.status(404).json({ error: "Friend request not found." });
-    await prisma.friendRequest.update({
+    const updatedRequest = await prisma.friendRequest.update({
       where: { id: request.id },
-      data: { status, respondedAt: new Date() }
+      data: { status, respondedAt: new Date() },
+      include: { requester: true, addressee: true }
     });
+    if (status === "ACCEPTED") {
+      emitToUser(io, updatedRequest.requesterId, "friend:accepted", {
+        request: friendRequestSummary(updatedRequest),
+        acceptedBy: friendUser(updatedRequest.addressee)
+      });
+    }
+    res.json(await friendsSummary(req.user!.id));
+  });
+
+  expressApp.delete("/api/friends/:friendId", requireAuth, async (req, res) => {
+    const friendId = String(req.params.friendId ?? "");
+    if (!friendId || friendId === req.user!.id) return res.status(400).json({ error: "Invalid friend." });
+    const deleted = await prisma.friendRequest.deleteMany({
+      where: {
+        status: "ACCEPTED",
+        OR: [
+          { requesterId: req.user!.id, addresseeId: friendId },
+          { requesterId: friendId, addresseeId: req.user!.id }
+        ]
+      }
+    });
+    if (!deleted.count) return res.status(404).json({ error: "Friend not found." });
+    emitToUser(io, friendId, "friend:removed", { userId: req.user!.id });
     res.json(await friendsSummary(req.user!.id));
   });
 
@@ -281,10 +317,13 @@ async function main() {
     const accuracy = clampNumber(req.body.accuracy, 0, 100);
     const consistency = clampNumber(req.body.consistency, 0, 100);
     const errors = Math.round(clampNumber(req.body.errors, 0, 10000));
+    const prompt = String(req.body.prompt ?? "");
+    const events = Array.isArray(req.body.events) ? req.body.events : [];
+    const typedChars = events.length;
     const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
     if (!user) return res.status(401).json({ error: "Authentication required." });
 
-    const score = practiceScore({ wpm, accuracy, consistency, errors, durationSeconds, currentRating: user.rating, difficulty });
+    const score = practiceScore({ wpm, accuracy, consistency, errors, durationSeconds, currentRating: user.rating, difficulty, typedChars, promptLength: prompt.length });
     const delta = practiceRatingDelta({ score, errors, accuracy, consistency, currentRating: user.rating, difficulty });
     const ratingAfter = Math.max(0, user.rating + delta);
 
@@ -305,7 +344,7 @@ async function main() {
         score
       }
     });
-    await recordPracticeWeakStats(user.id, String(req.body.prompt ?? ""), Array.isArray(req.body.events) ? req.body.events : []);
+    await recordPracticeWeakStats(user.id, prompt, events);
     await awardAchievements(user.id, { source: "practice", wpm, accuracy, consistency, score, errors });
 
     res.json({
@@ -488,6 +527,15 @@ function emitToUser(io: Server, userId: string, event: string, payload: unknown)
   const sockets = userSockets.get(userId);
   if (!sockets) return;
   sockets.forEach((socketId) => io.to(socketId).emit(event, payload));
+}
+
+function joinUserSocketsToRoom(io: Server, userId: string, roomCode: string) {
+  const sockets = userSockets.get(userId);
+  if (!sockets) return;
+  sockets.forEach((socketId) => {
+    const socket = io.sockets.sockets.get(socketId);
+    socket?.join(roomCode);
+  });
 }
 
 async function sendFriendRequestEmail(to: string, requesterUsername: string) {
