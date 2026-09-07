@@ -371,6 +371,12 @@ body {
   animation: login-key-tap 1.8s ease-in-out infinite;
 }
 
+.google-button-shell,
+.google-button-shell > div,
+.google-button-shell iframe {
+  width: 100% !important;
+}
+
 .velocity-title {
   font-family: "Trebuchet MS", "Arial Rounded MT Bold", "Arial Black", Inter, ui-sans-serif, system-ui, sans-serif;
   letter-spacing: 0;

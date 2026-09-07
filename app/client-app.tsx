@@ -16,6 +16,20 @@ type LeaderboardScope = "public" | "friends";
 type ToastTone = "info" | "success" | "error";
 type ToastMessage = { id: number; message: string; tone: ToastTone };
 type HeaderNotification = { id: string; title: string; detail: string; date: string; icon: React.ReactNode };
+type GoogleCredentialResponse = { credential?: string };
+
+declare global {
+  interface Window {
+    google?: {
+      accounts: {
+        id: {
+          initialize: (options: { client_id: string; callback: (response: GoogleCredentialResponse) => void }) => void;
+          renderButton: (parent: HTMLElement, options: { theme: "outline" | "filled_black"; size: "large"; width?: number; text?: "continue_with" | "signin_with" }) => void;
+        };
+      };
+    };
+  }
+}
 
 export default function Home() {
   const [token, setToken] = useState<string>("");
@@ -82,8 +96,10 @@ export default function Home() {
   const [deleteAccountText, setDeleteAccountText] = useState("");
   const [celebrate, setCelebrate] = useState(false);
   const inputRef = useRef<HTMLDivElement | null>(null);
+  const googleButtonRef = useRef<HTMLDivElement | null>(null);
   const raceStartedAtRef = useRef(0);
   const lastStrokeAtRef = useRef(0);
+  const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 
   const showToast = useCallback((message: string, tone: ToastTone = "info") => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -332,6 +348,66 @@ export default function Home() {
     localStorage.setItem("vk_user", JSON.stringify(result.user));
     showToast(authMode === "login" ? "Welcome back." : "Account created. Welcome to Velocity Keys.", "success");
   };
+
+  const submitGoogleAuth = useCallback(async (credential?: string) => {
+    if (!credential) {
+      showToast("Google sign-in did not return a credential.", "error");
+      return;
+    }
+    setAuthError("");
+    const result = await api<ApiResult<{ user: ClientUser; token: string }>>("/api/auth/google", {
+      method: "POST",
+      body: JSON.stringify({ credential })
+    });
+    if (result.error) {
+      setAuthError(result.error);
+      showToast(result.error, "error");
+      return;
+    }
+    setToken(result.token);
+    setUser(result.user);
+    localStorage.setItem("vk_token", result.token);
+    localStorage.setItem("vk_user", JSON.stringify(result.user));
+    showToast("Signed in with Google.", "success");
+  }, [showToast]);
+
+  useEffect(() => {
+    if (user || !googleClientId || !googleButtonRef.current) return;
+
+    const renderGoogleButton = () => {
+      if (!window.google || !googleButtonRef.current) return;
+      googleButtonRef.current.innerHTML = "";
+      window.google.accounts.id.initialize({
+        client_id: googleClientId,
+        callback: (response) => void submitGoogleAuth(response.credential)
+      });
+      window.google.accounts.id.renderButton(googleButtonRef.current, {
+        theme: theme === "dark" ? "filled_black" : "outline",
+        size: "large",
+        text: "continue_with",
+        width: googleButtonRef.current.offsetWidth || 380
+      });
+    };
+
+    if (window.google) {
+      renderGoogleButton();
+      return;
+    }
+
+    const existingScript = document.querySelector<HTMLScriptElement>('script[src="https://accounts.google.com/gsi/client"]');
+    if (existingScript) {
+      existingScript.addEventListener("load", renderGoogleButton, { once: true });
+      return () => existingScript.removeEventListener("load", renderGoogleButton);
+    }
+
+    const script = document.createElement("script");
+    script.src = "https://accounts.google.com/gsi/client";
+    script.async = true;
+    script.defer = true;
+    script.addEventListener("load", renderGoogleButton, { once: true });
+    document.head.appendChild(script);
+    return () => script.removeEventListener("load", renderGoogleButton);
+  }, [googleClientId, submitGoogleAuth, theme, user]);
 
   const loadAnalytics = useCallback(async () => {
     if (!token) return;
@@ -1033,6 +1109,20 @@ export default function Home() {
             <div className="mb-4 flex gap-2">
               <button className={tab(authMode === "login")} onClick={() => setAuthMode("login")}><LogIn className="h-4 w-4" /> Login</button>
               <button className={tab(authMode === "register")} onClick={() => setAuthMode("register")}><Plus className="h-4 w-4" /> Sign up</button>
+            </div>
+            <div className="mb-4">
+              {googleClientId ? (
+                <div className="google-button-shell" ref={googleButtonRef} />
+              ) : (
+                <div className="rounded-lg border border-dashed border-line bg-surface/55 px-3 py-2 text-center text-xs font-bold text-muted">
+                  Add Google Client ID to enable Google sign-in.
+                </div>
+              )}
+              <div className="my-3 flex items-center gap-3 text-[10px] font-black uppercase text-muted">
+                <span className="h-px flex-1 bg-line" />
+                or use email
+                <span className="h-px flex-1 bg-line" />
+              </div>
             </div>
             {authMode === "register" && (
               <input className={field} placeholder="username" value={authForm.username} onChange={(e) => setAuthForm({ ...authForm, username: e.target.value })} />

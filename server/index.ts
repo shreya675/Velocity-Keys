@@ -7,7 +7,7 @@ import { TextMode } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { levelForRating, practiceRatingDelta, practiceScore } from "../lib/race-math";
 import type { CodeLanguage, DailyChallengeSummary, FriendsSummary, KeystrokePayload, LeaderboardSummary, LeaderboardUser, PracticeDifficulty, PracticeHistoryItem, PracticeMode, PublicRoomSummary, VocabularyEntry } from "../lib/types";
-import { login, register, requireAuth, userFromToken } from "./auth";
+import { googleLogin, login, register, requireAuth, userFromToken } from "./auth";
 import { RaceService } from "./race-service";
 
 const dev = process.env.NODE_ENV !== "production";
@@ -30,6 +30,7 @@ async function main() {
 
   expressApp.post("/api/auth/register", register);
   expressApp.post("/api/auth/login", login);
+  expressApp.post("/api/auth/google", googleLogin);
 
   expressApp.get("/api/me", requireAuth, (req, res) => {
     res.json({ user: req.user });
