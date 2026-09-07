@@ -6,7 +6,7 @@ Velocity Keys is a real-time TypeRacer-style app built with Next.js, React, Node
 
 - Email/password signup and login with JWT auth
 - Private room creation, room-code joins, public rooms, and spectator joins
-- ELO-banded public matchmaking
+- Skill-based public matchmaking
 - Live race state over Socket.io: countdowns, progress, WPM, accuracy, consistency, and leaderboards
 - Anti-cheat scoring from keystroke timing, paste-speed bursts, machine-like intervals, and implausible finish times
 - Stored keystroke events for ghost replay
@@ -24,7 +24,7 @@ Velocity Keys is a real-time TypeRacer-style app built with Next.js, React, Node
 ## Architecture Notes
 
 - `server/index.ts` owns Express routes, auth APIs, analytics APIs, and Socket.io events.
-- `server/race-service.ts` keeps active room state in memory and persists race results, ELO updates, practice stats, and keystroke events to PostgreSQL.
+- `server/race-service.ts` keeps active room state in memory and persists race results, skill rating updates, practice stats, and keystroke events to PostgreSQL.
 - `app/page.tsx` is the main multiplayer UI: lobby, typing track, leaderboard, anti-cheat status, adaptive practice, ghost replay list, and analytics.
 - `prisma/schema.prisma` defines the durable data model for users, rooms, races, participants, replay events, practice stats, and ratings.
 

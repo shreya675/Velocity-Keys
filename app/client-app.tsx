@@ -2,7 +2,7 @@
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { io, type Socket } from "socket.io-client";
-import { Activity, Award, BarChart3, BookOpen, Braces, CalendarDays, Check, Copy, Eye, Flag, Gauge, History, Keyboard, Link as LinkIcon, Lock, LogIn, LogOut, Moon, Palette, Play, Plus, Quote, Radar, Settings, Sparkles, Square, Sun, Target, Timer, Trash2, Trophy, UserPlus, Users, WholeWord, X } from "lucide-react";
+import { Activity, Award, BarChart3, Bell, BookOpen, Braces, CalendarDays, Check, Copy, Eye, Flag, Gauge, History, Keyboard, Link as LinkIcon, Lock, LogIn, LogOut, Moon, Palette, Play, Plus, Quote, Radar, Settings, Sparkles, Square, Sun, Target, Timer, Trash2, Trophy, UserPlus, Users, WholeWord, X } from "lucide-react";
 import { calculateAccuracy, calculateConsistency, calculateWpm, levelForRating, practiceScore } from "@/lib/race-math";
 import type { AnalyticsSummary, ClientUser, CodeLanguage, DailyChallengeSummary, FriendRequestSummary, FriendsSummary, KeystrokePayload, LeaderboardSummary, LeaderboardUser, PracticeDifficulty, PracticeHistoryItem, PracticeMode, PracticeResult, PublicRoomSummary, RaceSnapshot, TextMode, VocabularyEntry } from "@/lib/types";
 
@@ -55,6 +55,7 @@ export default function Home() {
   const [myProfile, setMyProfile] = useState<LeaderboardUser | null>(null);
   const [friends, setFriends] = useState<FriendsSummary | null>(null);
   const [friendNoticeCount, setFriendNoticeCount] = useState(0);
+  const [notificationsOpen, setNotificationsOpen] = useState(false);
   const [friendUsername, setFriendUsername] = useState("");
   const [practiceHistory, setPracticeHistory] = useState<PracticeHistoryItem[]>([]);
   const [dailyChallenge, setDailyChallenge] = useState<DailyChallengeSummary | null>(null);
@@ -190,6 +191,29 @@ export default function Home() {
 
   const me = snapshot?.players.find((player) => player.userId === user?.id);
   const safeAnalytics = normalizeAnalytics(analytics);
+  const headerNotifications = useMemo(() => {
+    const friendItems = (friends?.incoming ?? []).slice(0, 4).map((request) => ({
+      id: `friend-${request.id}`,
+      title: "Friend request",
+      detail: `${request.requester.username} wants to connect with you.`,
+      date: request.createdAt,
+      icon: <UserPlus className="h-4 w-4 text-mint" />
+    }));
+    const achievementItems = [...(myProfile?.achievements ?? [])]
+      .sort((a, b) => new Date(b.earnedAt).getTime() - new Date(a.earnedAt).getTime())
+      .slice(0, 4)
+      .map((achievement) => ({
+        id: `achievement-${achievement.code}`,
+        title: "Achievement unlocked",
+        detail: achievement.title,
+        date: achievement.earnedAt,
+        icon: <Award className="h-4 w-4 text-brass" />
+      }));
+    return [...friendItems, ...achievementItems]
+      .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
+      .slice(0, 5);
+  }, [friends?.incoming, myProfile?.achievements]);
+  const notificationCount = Math.min(9, friendNoticeCount + (friends?.incoming.length ?? 0));
   const target = activeView === "race" ? snapshot?.prompt ?? "" : activeView === "daily" ? dailyChallenge?.prompt ?? "" : practicePrompt;
   const finished = Boolean(snapshot && typed === snapshot.prompt);
   const countdown = snapshot?.startsAt ? Math.max(0, Math.ceil((snapshot.startsAt - clock) / 1000)) : snapshot?.countdownSeconds ?? 0;
@@ -442,7 +466,8 @@ export default function Home() {
     void loadAnalytics();
     void loadPracticeHistory();
     void loadMyProfile();
-  }, [loadAnalytics, loadMyProfile, loadPracticeHistory]);
+    void loadFriends();
+  }, [loadAnalytics, loadFriends, loadMyProfile, loadPracticeHistory]);
 
   useEffect(() => {
     if (activeView === "leaderboard") {
@@ -878,11 +903,11 @@ export default function Home() {
         <section className="relative mx-auto grid min-h-[calc(100vh-3.5rem)] max-w-6xl items-center gap-8 lg:grid-cols-[minmax(0,1fr)_460px]">
           <div className="auth-copy max-w-3xl">
             <div className="mb-5 flex flex-wrap items-center gap-3">
-              <div className="auth-brand inline-flex items-center gap-2 rounded-lg border border-line bg-surface/85 px-3 py-2 text-sm font-black uppercase shadow-soft backdrop-blur">
-                <Keyboard className="h-4 w-4 text-mint" /> Velocity Keys
+              <div className="auth-brand inline-flex items-center gap-3 rounded-lg border border-line bg-surface/85 px-5 py-3 text-xl font-black uppercase shadow-soft backdrop-blur md:text-2xl">
+                <Keyboard className="h-5 w-5 text-mint md:h-6 md:w-6" /> Velocity Keys
               </div>
-              <button className={compactButton} onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
-                {theme === "light" ? <Moon className="h-4 w-4" /> : <Sun className="h-4 w-4" />} {theme === "light" ? "Dark" : "Light"}
+              <button className={authThemeButton} onClick={() => setTheme(theme === "light" ? "dark" : "light")}>
+                {theme === "light" ? <Moon className="h-3.5 w-3.5" /> : <Sun className="h-3.5 w-3.5" />} {theme === "light" ? "Dark" : "Light"}
               </button>
             </div>
             <div className="mb-4 inline-flex items-center gap-2 rounded-full border border-mint/40 bg-mint/10 px-3 py-1 text-xs font-black uppercase text-mint">
@@ -943,7 +968,7 @@ export default function Home() {
                 <div className="text-[10px] font-black uppercase text-muted">Timer</div>
               </div>
               <div className="rounded-lg border border-line bg-surface/70 p-3">
-                <div className="font-mono text-lg font-black">ELO</div>
+                <div className="font-mono text-lg font-black">Rank</div>
                 <div className="text-[10px] font-black uppercase text-muted">Rating</div>
               </div>
             </div>
@@ -958,15 +983,80 @@ export default function Home() {
       <ToastStack toasts={toasts} />
       {celebrate && <FinishCelebration />}
       {snapshot?.status === "COUNTDOWN" && <RaceCountdownOverlay countdown={countdown} />}
-      <header className="glass-panel mx-auto mb-6 flex max-w-[1500px] flex-col gap-5 rounded-lg border border-line bg-panel/80 px-5 py-5 shadow-soft backdrop-blur-xl">
-        <div>
-          <div className="mb-2 inline-flex items-center gap-2 rounded-full border border-line bg-surface/70 px-3 py-1 text-xs font-black uppercase text-muted">
-            <Sparkles className="h-3.5 w-3.5 text-brass" /> Real-time Typing Arena
+      <header className="app-header glass-panel mx-auto mb-6 flex max-w-[1500px] flex-col gap-5 rounded-lg border border-line bg-panel/80 px-5 py-5 shadow-soft backdrop-blur-xl">
+        <div className="flex w-full flex-wrap items-start justify-between gap-4">
+          <div className="w-full">
+          <div className="grid w-full grid-cols-[auto_minmax(96px,1fr)] items-center gap-4">
+            <h1 className="velocity-title text-4xl font-black md:text-6xl">Velocity Keys</h1>
+            <div className="title-typing-lane" aria-hidden="true">
+              <span className="title-lane-line" />
+              <span className="title-cursor" />
+              <span className="title-key title-key-a">W</span>
+              <span className="title-key title-key-b">P</span>
+              <span className="title-key title-key-c">M</span>
+            </div>
           </div>
-          <div className="flex items-center gap-3">
-            <h1 className="text-4xl font-black md:text-5xl">Velocity Keys</h1>
+            <div className="mt-1 flex flex-wrap items-center gap-2 text-base font-semibold text-muted md:text-lg">
+              <button
+                className="font-bold text-ink underline-offset-4 transition hover:text-mint hover:underline"
+                onClick={() => {
+                  setActiveView("profile");
+                  void loadProfile();
+                }}
+              >
+                {user.username}
+              </button>
+              <span>·</span>
+              <span title="Skill rating">{user.rating}</span>
+              <span>·</span>
+              <span>{levelForRating(user.rating)}</span>
+              <div className="relative">
+                <button
+                  className={iconButton}
+                  title="Notifications"
+                  onClick={() => {
+                    setNotificationsOpen((open) => !open);
+                    setFriendNoticeCount(0);
+                  }}
+                >
+                  <Bell className="h-4 w-4" />
+                  {notificationCount > 0 && (
+                    <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-coral px-1 font-mono text-[9px] font-black text-white">
+                      {notificationCount}
+                    </span>
+                  )}
+                </button>
+                {notificationsOpen && (
+                  <div className="notification-popover absolute left-0 top-12 z-[100] w-[min(340px,calc(100vw-3rem))] rounded-lg border border-line bg-panel/95 p-3 shadow-glow backdrop-blur-xl">
+                    <div className="mb-2 flex items-center justify-between gap-3">
+                      <div className="text-xs font-black uppercase text-muted">Notifications</div>
+                      <button className="text-xs font-black uppercase text-muted transition hover:text-ink" onClick={() => setNotificationsOpen(false)}>
+                        Close
+                      </button>
+                    </div>
+                    <div className="space-y-2">
+                      {headerNotifications.map((notification) => (
+                        <div className="rounded-lg border border-line bg-surface/75 p-3" key={notification.id}>
+                          <div className="flex items-start gap-2">
+                            {notification.icon}
+                            <div>
+                              <div className="text-sm font-black text-ink">{notification.title}</div>
+                              <div className="mt-1 text-xs font-semibold leading-5 text-muted">{notification.detail}</div>
+                            </div>
+                          </div>
+                        </div>
+                      ))}
+                      {!headerNotifications.length && (
+                        <div className="rounded-lg border border-dashed border-line bg-surface/55 p-4 text-sm font-semibold text-muted">
+                          No new notifications yet.
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                )}
+              </div>
+            </div>
           </div>
-          <p className="mt-1 text-base font-semibold text-muted md:text-lg">{user.username} · {user.rating} ELO · {levelForRating(user.rating)}</p>
         </div>
         <nav className="grid w-full grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-9">
           <button className={activeView === "practice" ? activeCompactButton : compactButton} onClick={() => { setActiveView("practice"); void loadPractice(); }}><Target className="h-4 w-4" /> Practice</button>
@@ -3051,5 +3141,6 @@ const secondaryButton = "inline-flex w-full items-center justify-center gap-2 ro
 const activeControl = "inline-flex w-full items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-3 py-2 font-bold text-white shadow-glow";
 const compactButton = "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-4 py-2 text-center font-bold transition hover:bg-surface hover:shadow-soft";
 const activeCompactButton = "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-4 py-2 text-center font-bold text-white shadow-glow";
+const authThemeButton = "inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-3 py-2 text-sm font-bold transition hover:bg-surface hover:shadow-soft";
 const iconButton = "inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-surface/75 transition hover:bg-surface hover:shadow-soft";
 const kbdClass = "mx-1 inline-flex min-w-9 items-center justify-center rounded border border-line bg-panel/90 px-2 py-1 font-mono text-xs font-black text-ink shadow-sm";
