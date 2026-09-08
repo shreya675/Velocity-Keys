@@ -642,6 +642,44 @@ button:disabled {
   pointer-events: none;
 }
 
+.help-modal-shell {
+  box-shadow:
+    0 28px 90px rgb(var(--shadow-color) / 0.46),
+    0 0 0 1px rgb(var(--color-mint) / 0.10),
+    inset 0 1px 0 rgb(var(--color-surface) / 0.18);
+}
+
+.help-modal-scroll {
+  background: rgb(var(--color-panel) / 0.96);
+  scrollbar-width: thin;
+  scrollbar-color: rgb(var(--color-mint) / 0.72) rgb(var(--color-surface) / 0.40);
+}
+
+.help-modal-scroll::-webkit-scrollbar {
+  width: 10px;
+}
+
+.help-modal-scroll::-webkit-scrollbar-track {
+  margin: 18px 0;
+  border-radius: 999px;
+  background: rgb(var(--color-surface) / 0.42);
+  border: 1px solid rgb(var(--color-line) / 0.45);
+}
+
+.help-modal-scroll::-webkit-scrollbar-thumb {
+  border: 2px solid transparent;
+  border-radius: 999px;
+  background:
+    linear-gradient(rgb(var(--color-mint)), rgb(var(--color-sky))) padding-box,
+    transparent border-box;
+}
+
+.help-modal-scroll::-webkit-scrollbar-thumb:hover {
+  background:
+    linear-gradient(rgb(var(--color-brass)), rgb(var(--color-mint))) padding-box,
+    transparent border-box;
+}
+
 .celebration-piece {
   position: absolute;
   top: -24px;

@@ -47,6 +47,7 @@ export default function Home() {
   const [finishEffects, setFinishEffects] = useState(true);
   const [socket, setSocket] = useState<Socket | null>(null);
   const [activeView, setActiveView] = useState<ActiveView>("practice");
+  const [helpOpen, setHelpOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<RaceSnapshot | null>(null);
   const [roomCode, setRoomCode] = useState("");
   const [publicRooms, setPublicRooms] = useState<PublicRoomSummary[]>([]);
@@ -99,6 +100,7 @@ export default function Home() {
   const googleButtonRef = useRef<HTMLDivElement | null>(null);
   const raceStartedAtRef = useRef(0);
   const lastStrokeAtRef = useRef(0);
+  const lastTimerTickRef = useRef("");
   const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
 
   const showToast = useCallback((message: string, tone: ToastTone = "info") => {
@@ -935,6 +937,26 @@ export default function Home() {
   }, [dailyRemaining, finishDailyChallenge, isDailyRunning, target.length, typed.length]);
 
   useEffect(() => {
+    const timerState = activeView === "practice" && isPracticeRunning
+      ? { key: "practice", remaining: practiceRemaining }
+      : activeView === "daily" && isDailyRunning
+        ? { key: "daily", remaining: dailyRemaining }
+        : activeView === "race" && snapshot?.status === "LIVE"
+          ? { key: `race-${snapshot.roomCode}`, remaining: raceRemaining }
+          : null;
+
+    if (!timerState || timerState.remaining <= 0 || timerState.remaining > 10) {
+      lastTimerTickRef.current = "";
+      return;
+    }
+
+    const tickKey = `${timerState.key}-${timerState.remaining}`;
+    if (lastTimerTickRef.current === tickKey) return;
+    lastTimerTickRef.current = tickKey;
+    playSoftTimerTick(timerState.remaining);
+  }, [activeView, dailyRemaining, isDailyRunning, isPracticeRunning, practiceRemaining, raceRemaining, snapshot?.roomCode, snapshot?.status]);
+
+  useEffect(() => {
     const onShortcut = (event: KeyboardEvent) => {
       if (!user || shouldIgnoreShortcut(event.target)) return;
       if (event.key === "Escape") {
@@ -1262,9 +1284,10 @@ export default function Home() {
           <button className={activeView === "history" ? activeCompactButton : compactButton} onClick={() => { setActiveView("history"); void loadPracticeHistory(); }}><History className="h-4 w-4" /> History</button>
           <button className={activeView === "profile" ? activeCompactButton : compactButton} onClick={() => { setProfileUser(null); setActiveView("profile"); void loadProfile(); }}><Users className="h-4 w-4" /> Profile</button>
           <button className={activeView === "settings" ? activeCompactButton : compactButton} onClick={() => setActiveView("settings")}><Settings className="h-4 w-4" /> Settings</button>
-          <button className={activeView === "help" ? activeCompactButton : compactButton} onClick={() => setActiveView("help")}><BookOpen className="h-4 w-4" /> How To Use</button>
+          <button className={compactButton} onClick={() => setHelpOpen(true)}><BookOpen className="h-4 w-4" /> How To Use</button>
         </nav>
       </header>
+      {helpOpen && <HowToUseModal onClose={() => setHelpOpen(false)} />}
 
       <section className={`mx-auto grid max-w-[1500px] gap-4 ${activeView === "leaderboard" || activeView === "history" || activeView === "settings" || activeView === "help" || activeView === "friends" || activeView === "daily" || activeView === "profile" ? "" : "xl:grid-cols-[minmax(0,1fr)_380px]"}`}>
         <section className="space-y-4">
@@ -1350,8 +1373,6 @@ export default function Home() {
               onDeleteTextChange={setDeleteAccountText}
               onDeleteAccount={deleteAccount}
             />
-          ) : activeView === "help" ? (
-            <HowToUseView />
           ) : (
             <>
           <Panel title={activeView === "race" ? roomTitle : "Practice Track"} icon={<Keyboard className="h-4 w-4" />}>
@@ -1396,10 +1417,9 @@ export default function Home() {
               </div>
             )}
             {snapshot?.status === "COUNTDOWN" && <div className="mb-4 animate-pulse rounded-lg border border-mint/45 bg-surface/90 px-4 py-4 text-center font-mono text-5xl font-black text-mint shadow-glow">{countdown}</div>}
-            {!snapshot && isPracticeRunning && <div className="mb-4 rounded-lg border border-mint/45 bg-surface/90 px-4 py-3 text-center font-mono text-4xl font-black text-mint shadow-glow">{formatDuration(practiceRemaining)}</div>}
             {!snapshot && activeView === "practice" && (
               <div className="mb-4 grid gap-2 sm:grid-cols-3">
-                <button className={primaryButton} onClick={startPractice}><Play className="h-4 w-4" /> Start Practice</button>
+                <button className={primaryButton} onClick={startPractice} disabled={isPracticeRunning}><Play className="h-4 w-4" /> Start Practice</button>
                 <button className={secondaryButton} onClick={startPractice}><Target className="h-4 w-4" /> Restart Practice</button>
                 <button className={secondaryButton} onClick={() => void finishPractice()} disabled={!isPracticeRunning}><Square className="h-4 w-4" /> End Practice</button>
               </div>
@@ -1413,6 +1433,7 @@ export default function Home() {
                 focusIndex={typed.length}
                 active={Boolean(snapshot ? snapshot.status === "LIVE" : isPracticeRunning)}
                 quietMistakes={quietMistakes}
+                tall={activeView === "race"}
                 onKeyDown={handleTypeKey}
               />
             )}
@@ -1435,6 +1456,7 @@ export default function Home() {
                   code={raceMode === "CODE"}
                   active={false}
                   quietMistakes={quietMistakes}
+                  tall
                   placeholder="Race text will appear here after you create a room, join a public room, or find a quick duel."
                 />
               </div>
@@ -1466,11 +1488,13 @@ export default function Home() {
         {activeView !== "leaderboard" && activeView !== "history" && activeView !== "settings" && activeView !== "help" && activeView !== "friends" && activeView !== "daily" && activeView !== "profile" && <aside className="space-y-4">
           {activeView === "practice" ? (
             <Panel title="Practice Settings" icon={<Timer className="h-4 w-4" />}>
+              {isPracticeRunning && <PracticeTimerPopup remaining={practiceRemaining} />}
               <label className="text-xs font-bold uppercase text-muted">Timer</label>
               <div className="mb-3 grid grid-cols-3 gap-2">
                 {[30, 60, 120].map((seconds) => (
                   <button
                     className={practiceDuration === seconds ? activeControl : secondaryButton}
+                    disabled={isPracticeRunning}
                     key={seconds}
                     onClick={() => {
                       setPracticeDuration(seconds);
@@ -1492,6 +1516,7 @@ export default function Home() {
                     <select
                       aria-label="Practice timer minutes"
                       className={timerSelect}
+                      disabled={isPracticeRunning}
                       size={6}
                       value={customTimerMinutes}
                       onChange={(event) => updatePracticeDuration(Number(event.target.value), customTimerSeconds)}
@@ -1509,6 +1534,7 @@ export default function Home() {
                     <select
                       aria-label="Practice timer seconds"
                       className={timerSelect}
+                      disabled={isPracticeRunning}
                       size={6}
                       value={customTimerSeconds}
                       onChange={(event) => updatePracticeDuration(customTimerMinutes, Number(event.target.value))}
@@ -1531,6 +1557,7 @@ export default function Home() {
                 {practiceDifficulties.map((difficulty) => (
                   <button
                     className={practiceDifficulty === difficulty.value ? activeControl : secondaryButton}
+                    disabled={isPracticeRunning}
                     key={difficulty.value}
                     onClick={() => {
                       setPracticeDifficulty(difficulty.value);
@@ -1546,6 +1573,7 @@ export default function Home() {
                 {practiceModes.map((mode) => (
                   <button
                     className={practiceMode === mode.value ? activeControl : secondaryButton}
+                    disabled={isPracticeRunning}
                     key={mode.value}
                     onClick={() => {
                       setPracticeMode(mode.value);
@@ -1561,6 +1589,7 @@ export default function Home() {
                   <label className="text-xs font-bold uppercase text-muted">Code language</label>
                   <select
                     className={field}
+                    disabled={isPracticeRunning}
                     value={codeLanguage}
                     onChange={(event) => {
                       const language = event.target.value as CodeLanguage;
@@ -1586,6 +1615,12 @@ export default function Home() {
           ) : activeView === "race" ? (
             <>
               <Panel title="Race Lobby" icon={<Users className="h-4 w-4" />}>
+                {snapshot && (snapshot.status === "COUNTDOWN" || snapshot.status === "LIVE") && (
+                  <RaceTimerPopup
+                    label={snapshot.status === "COUNTDOWN" ? "Starting In" : "Time Left"}
+                    value={snapshot.status === "COUNTDOWN" ? countdown ? `00:0${countdown}` : "Go" : formatDuration(raceRemaining)}
+                  />
+                )}
                 {raceSettingsLocked && (
                   <div className="mb-3 rounded-lg border border-line bg-surface/70 p-3 text-xs font-bold uppercase text-muted">
                     {snapshot?.isDuel ? "Quick Duel is locked to the two matched racers." : "Room settings are locked until this race ends."}
@@ -1816,6 +1851,34 @@ function ToastStack({ toasts }: { toasts: ToastMessage[] }) {
   );
 }
 
+function PracticeTimerPopup({ remaining }: { remaining: number }) {
+  return (
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-panel/70 px-5 py-6 backdrop-blur-md">
+      <div className="w-full rounded-lg border border-mint/70 bg-panel/95 px-6 py-8 text-center text-ink shadow-glow backdrop-blur-2xl">
+        <div className="mb-3 flex items-center justify-center gap-2 text-xs font-black uppercase text-muted">
+          <Timer className="h-4 w-4 text-mint" /> Time Left
+        </div>
+        <div className="font-mono text-7xl font-black text-mint">{formatDuration(remaining)}</div>
+        <div className="mt-3 text-xs font-black uppercase text-muted">Practice in progress</div>
+      </div>
+    </div>
+  );
+}
+
+function RaceTimerPopup({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="absolute inset-0 z-30 flex items-center justify-center bg-panel/70 px-5 py-6 backdrop-blur-md">
+      <div className="w-full rounded-lg border border-mint/70 bg-panel/95 px-6 py-8 text-center text-ink shadow-glow backdrop-blur-2xl">
+        <div className="mb-3 flex items-center justify-center gap-2 text-xs font-black uppercase text-muted">
+          <Timer className="h-4 w-4 text-mint" /> {label}
+        </div>
+        <div className="font-mono text-7xl font-black text-mint">{value}</div>
+        <div className="mt-3 text-xs font-black uppercase text-muted">Race in progress</div>
+      </div>
+    </div>
+  );
+}
+
 function RaceRoomLeaderboard({ snapshot }: { snapshot: RaceSnapshot | null }) {
   const players = snapshot?.players ?? [];
   if (!players.length) {
@@ -1828,7 +1891,7 @@ function RaceRoomLeaderboard({ snapshot }: { snapshot: RaceSnapshot | null }) {
         <span>Rank</span>
         <span>User</span>
         <span className="text-right">Status</span>
-        <span className="text-right">Progress</span>
+        <span className="text-right">Accuracy</span>
         <span className="text-right">WPM</span>
       </div>
       {players.map((player, index) => (
@@ -1841,7 +1904,7 @@ function RaceRoomLeaderboard({ snapshot }: { snapshot: RaceSnapshot | null }) {
             </div>
           </div>
           <span className="text-right text-sm font-black text-muted">{snapshot?.status === "WAITING" ? player.ready ? "Ready" : "Not ready" : `${player.rating} pts`}</span>
-          <span className="text-right font-mono font-black">{player.progress}%</span>
+          <span className="text-right font-mono font-black">{Math.round(player.accuracy)}%</span>
           <span className="text-right font-mono font-black">{player.wpm}</span>
         </div>
       ))}
@@ -2142,6 +2205,23 @@ function PracticeHistoryView({ history }: { history: PracticeHistoryItem[] }) {
   );
 }
 
+function HowToUseModal({ onClose }: { onClose: () => void }) {
+  return (
+    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-ink/35 p-4 backdrop-blur-sm">
+      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_18%,rgb(var(--color-mint)/0.10),transparent_32%),radial-gradient(circle_at_80%_70%,rgb(var(--color-sky)/0.08),transparent_26%)]" />
+      <div className="help-modal-shell relative max-h-[88vh] w-full max-w-6xl overflow-hidden rounded-lg border border-mint/45 bg-panel/95 p-2 shadow-glow backdrop-blur-xl">
+        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-mint via-sky to-brass" />
+        <button className="absolute right-5 top-5 z-10 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-surface/90 text-ink shadow-soft transition hover:border-mint hover:bg-surface" title="Close" onClick={onClose}>
+          <X className="h-5 w-5" />
+        </button>
+        <div className="help-modal-scroll max-h-[calc(88vh-1rem)] overflow-y-auto p-4 pr-5">
+          <HowToUseView />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function HowToUseView() {
   const guideSections = [
     {
@@ -2288,35 +2368,6 @@ function ProgressCoach({
 
   return (
     <div className="space-y-4">
-      <Panel title="Next Up" icon={<Sparkles className="h-4 w-4" />}>
-        <div className="rounded-lg border border-line bg-surface/75 p-4">
-          <div className="flex items-start justify-between gap-3">
-            <div>
-              <div className="text-xs font-black uppercase text-muted">Next achievement</div>
-              <div className="mt-1 text-lg font-black">{nextAchievement.title}</div>
-            </div>
-            <Award className="h-5 w-5 text-brass" />
-          </div>
-          <div className="mt-3 h-2 overflow-hidden rounded-full bg-line">
-            <div className="h-full rounded-full bg-mint transition-all duration-500" style={{ width: `${nextAchievement.percent}%` }} />
-          </div>
-          <div className="mt-2 flex justify-between gap-3 text-xs font-bold uppercase text-muted">
-            <span>{nextAchievement.currentLabel}</span>
-            <span>{nextAchievement.targetLabel}</span>
-          </div>
-          <p className="mt-3 text-sm font-semibold leading-6 text-muted">{nextAchievement.description}</p>
-        </div>
-
-        <div className="mt-3 rounded-lg border border-line bg-surface/75 p-4">
-          <div className="text-xs font-black uppercase text-muted">Suggested practice</div>
-          <div className="mt-1 text-lg font-black">{suggestion.title}</div>
-          <p className="mt-2 text-sm font-semibold leading-6 text-muted">{suggestion.reason}</p>
-          <button className={`${secondaryButton} mt-3`} onClick={() => onUseSuggestion(suggestion.mode, suggestion.difficulty, suggestion.duration)}>
-            <Target className="h-4 w-4" /> Use Suggestion
-          </button>
-        </div>
-      </Panel>
-
       {showRecentActivity && (
         <Panel title="Recent Activity" icon={<History className="h-4 w-4" />}>
           <div className="space-y-2">
@@ -2563,36 +2614,12 @@ function DailyChallengeView({
   onFinish: () => void;
 }) {
   const leaderboard = challenge?.leaderboard ?? [];
+  const topDailyEntries = leaderboard.slice(0, 10);
   const showLiveMetrics = running || typed.length > 0;
 
   return (
-    <div className="space-y-4">
-      <Panel title="Daily Rules" icon={<CalendarDays className="h-4 w-4" />}>
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric label="Time" value={formatDuration(challenge?.durationSeconds ?? 60)} />
-          <Metric label="Entries" value={String(leaderboard.length)} />
-          <Metric label="Best WPM" value={String(challenge?.myEntry?.wpm ?? 0)} />
-          <Metric label="Best Score" value={String(challenge?.myEntry?.score ?? 0)} />
-        </div>
-        <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-semibold text-muted">
-          One fixed prompt is shared by everyone each day. You can replay it, but only your best score stays on today&apos;s leaderboard.
-        </div>
-        <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-semibold text-muted">
-          <kbd className={kbdClass}>Esc</kbd> restarts the current daily run.
-        </div>
-      </Panel>
-
+    <div className="grid gap-4 xl:grid-cols-[minmax(0,7fr)_minmax(320px,3fr)] xl:items-start">
       <Panel title="Daily Challenge" icon={<CalendarDays className="h-4 w-4" />}>
-        <div className="mb-4 flex flex-wrap items-center justify-between gap-3 rounded-lg border border-line bg-surface/75 p-4">
-          <div>
-            <div className="text-xs font-black uppercase text-muted">Today&apos;s fixed text</div>
-            <div className="mt-1 font-mono text-xl font-black">{challenge ? new Date(`${challenge.challengeDate}T00:00:00`).toLocaleDateString() : "Loading..."}</div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <button className={primaryButton} onClick={onStart}><Play className="h-4 w-4" /> {typed.length ? "Restart Daily" : "Start Daily"}</button>
-            <button className={secondaryButton} onClick={onFinish} disabled={!running}><Square className="h-4 w-4" /> Finish</button>
-          </div>
-        </div>
         {showLiveMetrics ? (
           <div className="mb-4 grid gap-2 md:grid-cols-5">
             <Metric label="WPM" value={String(metrics.wpm)} />
@@ -2610,7 +2637,7 @@ function DailyChallengeView({
           </div>
         ) : (
           <div className="mb-4 rounded-lg border border-line bg-surface/75 p-4 text-sm font-semibold text-muted">
-            Everyone gets the same 60-second challenge today. Your best score is saved on the daily leaderboard.
+            Everyone gets the same daily text. Your best score is saved on today&apos;s leaderboard.
           </div>
         )}
         <TypingText
@@ -2626,27 +2653,47 @@ function DailyChallengeView({
       </Panel>
 
       <Panel title={"Today's Leaderboard"} icon={<Trophy className="h-4 w-4" />}>
+        <div className="mb-3 rounded-lg border border-line bg-surface/75 p-3">
+          <div className="mb-3 grid gap-3">
+            <div>
+              <div className="text-[10px] font-black uppercase text-muted">Today&apos;s fixed text</div>
+              <div className="mt-0.5 font-mono text-base font-black">{challenge ? new Date(`${challenge.challengeDate}T00:00:00`).toLocaleDateString() : "Loading..."}</div>
+            </div>
+            <div className="grid w-full gap-2">
+              <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-3 py-1.5 text-sm font-bold text-white shadow-glow transition hover:brightness-105" onClick={onStart}><Play className="h-3.5 w-3.5" /> {typed.length ? "Restart Daily" : "Start Daily"}</button>
+              <button className="inline-flex min-h-10 items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-3 py-1.5 text-sm font-bold transition hover:bg-surface hover:shadow-soft disabled:cursor-not-allowed disabled:opacity-60" onClick={onFinish} disabled={!running}><Square className="h-3.5 w-3.5" /> Finish</button>
+            </div>
+          </div>
+          <div className="grid gap-2 sm:grid-cols-2">
+            <div className="rounded-lg border border-line bg-surface/70 px-3 py-2">
+              <div className="text-[10px] font-black uppercase text-muted">Time</div>
+              <div className="mt-0.5 font-mono text-base font-black">{formatDuration(challenge?.durationSeconds ?? 60)}</div>
+            </div>
+            <div className="rounded-lg border border-line bg-surface/70 px-3 py-2">
+              <div className="text-[10px] font-black uppercase text-muted">Entries</div>
+              <div className="mt-0.5 font-mono text-base font-black">{leaderboard.length}</div>
+            </div>
+          </div>
+        </div>
         <div className="overflow-hidden rounded-lg border border-line bg-surface/65">
-          <div className="grid grid-cols-[54px_1fr_80px_90px_80px] gap-3 border-b border-line bg-panel/75 px-3 py-2 text-[11px] font-black uppercase text-muted">
+          <div className="grid grid-cols-[42px_1fr_54px_64px] gap-2 border-b border-line bg-panel/75 px-3 py-2 text-[10px] font-black uppercase text-muted">
             <span>Rank</span>
             <span>User</span>
             <span className="text-right">WPM</span>
             <span className="text-right">Score</span>
-            <span className="text-right">Errors</span>
           </div>
-          {leaderboard.map((entry, index) => (
-            <div className="grid grid-cols-[54px_1fr_80px_90px_80px] items-center gap-3 border-b border-line px-3 py-3 last:border-b-0" key={entry.userId}>
-              <span className="font-mono text-lg font-black">#{index + 1}</span>
+          {topDailyEntries.map((entry, index) => (
+            <div className="grid grid-cols-[42px_1fr_54px_64px] items-center gap-2 border-b border-line px-3 py-3 last:border-b-0" key={entry.userId}>
+              <span className="font-mono text-base font-black">#{index + 1}</span>
               <span>
                 <span className="block font-black">{entry.username}</span>
-                <span className="block text-xs font-semibold text-muted">{entry.level} · {entry.accuracy}% accuracy</span>
+                <span className="block text-xs font-semibold text-muted">{entry.accuracy}% accuracy</span>
               </span>
               <span className="text-right font-mono font-black">{entry.wpm}</span>
               <span className="text-right font-mono font-black">{entry.score}</span>
-              <span className="text-right font-mono font-black">{entry.errors}</span>
             </div>
           ))}
-          {!leaderboard.length && (
+          {!topDailyEntries.length && (
             <div className="p-6 text-sm font-semibold text-muted">No daily runs yet. Be the first one on today&apos;s board.</div>
           )}
         </div>
@@ -2656,6 +2703,8 @@ function DailyChallengeView({
 }
 
 function ProfileView({ profile, currentUserId, analytics }: { profile: LeaderboardUser | null; currentUserId: string; analytics: AnalyticsSummary }) {
+  const nextAchievement = nextAchievementForProfile(profile);
+
   return (
     <div className="space-y-4">
     <Panel title={profile?.id === currentUserId ? "My Profile" : "User Profile"} icon={<Users className="h-4 w-4" />}>
@@ -2695,6 +2744,25 @@ function ProfileView({ profile, currentUserId, analytics }: { profile: Leaderboa
       <MiniChart points={analytics.ratingHistory.map((item) => item.rating)} color="#4169a8" label="Rating history" />
     </Panel>
     <Panel title="Achievements" icon={<Award className="h-4 w-4" />}>
+      {profile && (
+        <div className="mb-4 rounded-lg border border-line bg-surface/75 p-4">
+          <div className="flex items-start justify-between gap-3">
+            <div>
+              <div className="text-xs font-black uppercase text-muted">Next achievement</div>
+              <div className="mt-1 text-lg font-black">{nextAchievement.title}</div>
+            </div>
+            <Award className="h-5 w-5 text-brass" />
+          </div>
+          <div className="mt-3 h-2 overflow-hidden rounded-full bg-line">
+            <div className="h-full rounded-full bg-mint transition-all duration-500" style={{ width: `${nextAchievement.percent}%` }} />
+          </div>
+          <div className="mt-2 flex justify-between gap-3 text-xs font-bold uppercase text-muted">
+            <span>{nextAchievement.currentLabel}</span>
+            <span>{nextAchievement.targetLabel}</span>
+          </div>
+          <p className="mt-3 text-sm font-semibold leading-6 text-muted">{nextAchievement.description}</p>
+        </div>
+      )}
       {profile?.achievements.length ? (
         <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
           {profile.achievements.map((achievement) => (
@@ -2730,16 +2798,42 @@ const TypingText = React.forwardRef<HTMLDivElement, {
   active?: boolean;
   quietMistakes?: boolean;
   placeholder?: string;
+  tall?: boolean;
   onKeyDown?: (event: React.KeyboardEvent<HTMLDivElement>) => void;
-}>(function TypingText({ prompt, typed, code, focusIndex = 0, active = false, quietMistakes = false, placeholder = "Choose a practice format and start typing.", onKeyDown }, ref) {
+}>(function TypingText({ prompt, typed, code, focusIndex = 0, active = false, quietMistakes = false, placeholder = "Choose a practice format and start typing.", tall = false, onKeyDown }, ref) {
   const safePrompt = prompt ?? "";
-  const windowStart = focusIndex > 260 ? Math.max(0, focusIndex - 160) : 0;
-  const windowEnd = Math.min(safePrompt.length, Math.max(900, focusIndex + 740));
+  const containerRef = useRef<HTMLDivElement | null>(null);
+  const currentRef = useRef<HTMLSpanElement | null>(null);
+  const windowStart = focusIndex > 900 ? Math.max(0, focusIndex - 420) : 0;
+  const windowEnd = Math.min(safePrompt.length, Math.max(1400, focusIndex + 980));
   const visiblePrompt = safePrompt.slice(windowStart, windowEnd);
+  const heightClass = tall ? "max-h-[720px] min-h-[720px]" : "max-h-[560px] min-h-[560px]";
+
+  useEffect(() => {
+    const container = containerRef.current;
+    const current = currentRef.current;
+    if (!container) return;
+    if (!active || !current) {
+      container.scrollTop = 0;
+      return;
+    }
+
+    const styles = window.getComputedStyle(container);
+    const lineHeight = Number.parseFloat(styles.lineHeight) || 64;
+    const targetTop = Math.max(0, current.offsetTop - lineHeight * 1.4);
+    if (Math.abs(container.scrollTop - targetTop) > lineHeight * 0.65) {
+      container.scrollTop = targetTop;
+    }
+  }, [active, focusIndex, visiblePrompt]);
+
   return (
     <div
-      ref={ref}
-      className={`type-text min-h-[560px] cursor-text rounded-lg border border-line bg-surface/90 p-9 text-4xl leading-[4.1rem] shadow-glow outline-none ring-mint/30 backdrop-blur-xl transition focus:ring-4 ${code ? "font-mono text-2xl leading-[3.15rem]" : "font-sans"} ${active ? "border-mint" : ""}`}
+      ref={(node) => {
+        containerRef.current = node;
+        if (typeof ref === "function") ref(node);
+        else if (ref) ref.current = node;
+      }}
+      className={`type-text ${heightClass} cursor-text overflow-hidden rounded-lg border border-line bg-surface/90 p-9 text-4xl leading-[4.1rem] shadow-glow outline-none ring-mint/30 backdrop-blur-xl transition focus:ring-4 ${code ? "font-mono text-2xl leading-[3.15rem]" : "font-sans"} ${active ? "border-mint" : ""}`}
       role="textbox"
       tabIndex={0}
       onKeyDown={onKeyDown}
@@ -2749,7 +2843,7 @@ const TypingText = React.forwardRef<HTMLDivElement, {
       {visiblePrompt ? visiblePrompt.split("").map((char, visibleIndex) => {
         const index = windowStart + visibleIndex;
         const state = index < typed.length ? (typed[index] === char || quietMistakes ? "done" : "wrong") : index === typed.length ? "current" : "";
-        return <span className={state} key={`${char}-${index}`}>{char}</span>;
+        return <span className={state} key={`${char}-${index}`} ref={index === typed.length ? currentRef : undefined}>{char}</span>;
       }) : <span className="text-muted">{placeholder}</span>}
     </div>
   );
@@ -3158,6 +3252,34 @@ function formatDuration(totalSeconds: number) {
   const minutes = Math.floor(duration / 60);
   const seconds = duration % 60;
   return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
+}
+
+function playSoftTimerTick(remaining: number) {
+  const AudioContextClass = window.AudioContext || (window as typeof window & { webkitAudioContext?: typeof AudioContext }).webkitAudioContext;
+  if (!AudioContextClass) return;
+
+  try {
+    const context = new AudioContextClass();
+    const oscillator = context.createOscillator();
+    const gain = context.createGain();
+    const now = context.currentTime;
+    const frequency = remaining === 1 ? 920 : 520 + (10 - remaining) * 36;
+    const peakVolume = remaining <= 3 ? 0.32 : 0.24;
+
+    oscillator.type = "sine";
+    oscillator.frequency.setValueAtTime(frequency, now);
+    oscillator.frequency.exponentialRampToValueAtTime(Math.max(240, frequency * 0.72), now + 0.2);
+    gain.gain.setValueAtTime(0.0001, now);
+    gain.gain.exponentialRampToValueAtTime(peakVolume, now + 0.02);
+    gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.3);
+    oscillator.connect(gain);
+    gain.connect(context.destination);
+    oscillator.start(now);
+    oscillator.stop(now + 0.32);
+    window.setTimeout(() => void context.close(), 380);
+  } catch {
+    // Browsers can block audio until a user gesture; the timer should keep working silently.
+  }
 }
 
 function formatTypingTime(totalSeconds: number) {

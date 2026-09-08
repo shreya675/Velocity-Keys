@@ -671,10 +671,7 @@ function dailyChallengeDate(date = new Date()) {
 
 function dailyPromptForDate(challengeDate: string) {
   const seed = challengeDate.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  const prompt = dailyChallengePrompts[seed % dailyChallengePrompts.length];
-  const wordBank = wordsForDifficulty(seed % 3 === 0 ? "HARD" : seed % 3 === 1 ? "MEDIUM" : "EASY");
-  const tail = Array.from({ length: 80 }, (_, index) => wordBank[(seed + index * 7) % wordBank.length]).join(" ");
-  return `${prompt} ${tail}`;
+  return dailyChallengePrompts[seed % dailyChallengePrompts.length];
 }
 
 async function awardAchievements(
@@ -1022,12 +1019,14 @@ const codeSnippets: Record<CodeLanguage, string[]> = {
 };
 
 const dailyChallengePrompts = [
-  "Daily improvement is built from small honest repetitions. Focus on calm accuracy first, then let speed arrive from rhythm and trust.",
-  "A useful system should reward patience as much as speed. The best typists notice patterns, recover quickly, and keep their hands relaxed.",
-  "Every test is a compact record of attention. Clean inputs, steady timing, and fewer corrections reveal more than a single fast burst.",
-  "Practice becomes meaningful when it measures progress clearly. A strong result combines speed, accuracy, consistency, and control under pressure.",
-  "The leaderboard changes every day, but the useful habit stays the same. Type the next word clearly and let the score follow the work.",
-  "Skill grows when feedback is specific. Slow down around difficult letters, keep moving through easy words, and finish with fewer avoidable errors."
+  "Measured progress often feels ordinary at first, but deliberate practice compounds into quiet confidence when you return with patience every day. A resilient typist notices small mistakes early, adjusts without frustration, and protects rhythm through the entire passage.",
+  "Ambitious goals become manageable when they are translated into consistent routines. Reliable improvement depends on attention, restraint, and the willingness to correct imprecise habits before they become automatic.",
+  "Strong communication depends on nuance: direct enough to be understood, careful enough to avoid careless assumptions, and precise enough to carry meaning without unnecessary noise. Type each sentence as if clarity matters more than speed.",
+  "Curiosity becomes useful when it is paired with discipline. The best learners examine feedback without defensiveness, revise their approach deliberately, and keep practicing long after the first burst of motivation fades.",
+  "Good judgment is rarely dramatic; it appears in small decisions made consistently under pressure. Slow your hands around difficult words, recover smoothly after errors, and let accuracy build the final score.",
+  "A competitive result is not created by panic or reckless speed. It comes from controlled momentum, accurate observation, and the composure to finish a demanding passage without letting one mistake disturb the next word.",
+  "Complex skills improve through focused repetition rather than random effort. When the task becomes uncomfortable, breathe, read ahead with intention, and turn each difficult phrase into a cleaner attempt.",
+  "The leaderboard changes every day, but the useful habit remains stable. Treat this challenge as a short exercise in precision, vocabulary, and calm endurance rather than a race against scattered words."
 ];
 
 type AchievementStats = {
