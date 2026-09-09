@@ -1151,7 +1151,7 @@ export default function Home() {
     return (
       <main className="auth-stage min-h-screen overflow-hidden px-5 py-7 text-ink">
         <ToastStack toasts={toasts} />
-        <section className="relative mx-auto grid min-h-[calc(100vh-3.5rem)] max-w-6xl items-center gap-8 lg:grid-cols-[minmax(0,1fr)_460px]">
+        <section className="relative mx-auto grid min-h-[calc(100svh-3.5rem)] max-w-6xl items-center gap-8 lg:grid-cols-[minmax(0,1fr)_460px]">
           <div className="auth-copy max-w-3xl">
             <div className="mb-5 flex flex-wrap items-center gap-3">
               <div className="auth-brand inline-flex items-center gap-3 rounded-lg border border-line bg-surface/85 px-5 py-3 text-xl font-black uppercase shadow-soft backdrop-blur md:text-2xl">
@@ -1183,7 +1183,7 @@ export default function Home() {
               </div>
             </div>
           </div>
-          <div className="auth-card glass-panel rounded-lg border border-line bg-panel/95 p-5 pt-6 shadow-glow backdrop-blur-xl">
+          <div className="auth-card glass-panel min-w-0 rounded-lg border border-line bg-panel/95 p-5 pt-6 shadow-glow backdrop-blur-xl">
             <div className="mb-4">
               <div className="inline-flex items-center gap-2 rounded-full border border-line bg-surface/75 px-3 py-1 text-xs font-black uppercase text-muted">
                 <Check className="h-3.5 w-3.5 text-mint" /> Ready to race
@@ -1251,7 +1251,7 @@ export default function Home() {
       <SiteHeader user={user} activeView={activeView} notifications={headerNotifications} friendCount={friendNoticeCount}
         raceHref={snapshot ? `/race?room=${encodeURIComponent(snapshot.roomCode)}` : "/race"}
         onReadNotifications={() => setFriendNoticeCount(0)} onLogout={logout} />
-      <main id="page-content" tabIndex={-1} className="mx-auto max-w-[1440px] px-5 py-8 outline-none lg:px-8 lg:py-10">
+      <main id="page-content" tabIndex={-1} className="mx-auto max-w-[1440px] px-3 py-5 sm:px-5 sm:py-8 outline-none lg:px-8 lg:py-10">
         <div className="mb-7 flex flex-wrap items-end justify-between gap-3">
           <div><h1 className="text-2xl font-semibold tracking-tight md:text-3xl">{sections[activeView].title}</h1><p className="mt-2 text-sm text-muted">{sections[activeView].description}</p></div>
           {activeView === "practice" && <Link href="/history" className="text-sm font-medium text-muted transition hover:text-ink">View typing history →</Link>}
@@ -1365,7 +1365,7 @@ export default function Home() {
                     <div className="text-xs font-black uppercase text-muted">{snapshot.status === "WAITING" ? "Ready Check" : snapshot.status === "COUNTDOWN" ? "Countdown" : "Race Timer"}</div>
                     <div className="mt-1 font-mono text-3xl font-black">{snapshot.status === "LIVE" ? formatDuration(raceRemaining) : snapshot.status === "COUNTDOWN" ? countdown : racerCount < 2 ? "Need 2 racers" : `${readyCount}/${racerCount} ready`}</div>
                   </div>
-                  <div className="grid min-w-[260px] grid-cols-3 gap-2 text-sm">
+                  <div className="grid w-full min-w-0 grid-cols-3 gap-2 text-sm">
                     <Metric label="Mode" value={(snapshot.raceMode ?? "WORDS") === "CODE" ? formatCodeLanguage(snapshot.codeLanguage ?? "CPP") : formatModeLabel(snapshot.raceMode ?? "WORDS")} />
                     <Metric label="Difficulty" value={titleCase(snapshot.difficulty)} />
                     <Metric label="Length" value={formatDuration(snapshot.durationSeconds)} />
@@ -1864,7 +1864,7 @@ function RaceRoomLeaderboard({ snapshot }: { snapshot: RaceSnapshot | null }) {
   }
 
   return (
-    <div className="overflow-hidden rounded-lg border border-line bg-surface/65">
+    <div className="score-table overflow-x-auto rounded-lg border border-line bg-surface/65" tabIndex={0} role="region" aria-label="Scores, scroll horizontally to see all columns">
       <div className="grid grid-cols-[64px_1fr_130px_130px_130px] gap-3 border-b border-line bg-panel/75 px-4 py-3 text-[11px] font-black uppercase text-muted">
         <span>Rank</span>
         <span>User</span>
@@ -1950,7 +1950,7 @@ function LeaderboardView({
             <Users className="h-4 w-4" /> Friends
           </button>
         </div>
-        <div className="overflow-hidden rounded-lg border border-line bg-surface/65">
+        <div className="score-table overflow-x-auto rounded-lg border border-line bg-surface/65" tabIndex={0} role="region" aria-label="Scores, scroll horizontally to see all columns">
           <div className="grid grid-cols-[54px_1fr_90px_90px_90px] gap-3 border-b border-line bg-panel/75 px-3 py-2 text-[11px] font-black uppercase text-muted">
             <span>Rank</span>
             <span>User</span>
@@ -2158,7 +2158,7 @@ function HistorySummary({ history }: { history: PracticeHistoryItem[] }) {
 function PracticeHistoryView({ history }: { history: PracticeHistoryItem[] }) {
   return (
     <Panel title="Practice History" icon={<History className="h-4 w-4" />}>
-      <div className="overflow-hidden rounded-lg border border-line bg-surface/65">
+      <div className="score-table overflow-x-auto rounded-lg border border-line bg-surface/65" tabIndex={0} role="region" aria-label="Scores, scroll horizontally to see all columns">
         <div className="grid grid-cols-[1.1fr_90px_90px_90px_90px_1fr] gap-3 border-b border-line bg-panel/75 px-3 py-2 text-[11px] font-black uppercase text-muted">
           <span>Date</span>
           <span>Mode</span>
@@ -2677,7 +2677,7 @@ function DailyChallengeView({
             </div>
           </div>
         </div>
-        <div className="overflow-hidden rounded-lg border border-line bg-surface/65">
+        <div className="score-table overflow-x-auto rounded-lg border border-line bg-surface/65" tabIndex={0} role="region" aria-label="Scores, scroll horizontally to see all columns">
           <div className="grid grid-cols-[42px_1fr_54px_64px] gap-2 border-b border-line bg-panel/75 px-3 py-2 text-[10px] font-black uppercase text-muted">
             <span>Rank</span>
             <span>User</span>
@@ -2809,7 +2809,7 @@ const TypingText = React.forwardRef<HTMLDivElement, {
   const windowStart = focusIndex > 900 ? Math.max(0, focusIndex - 420) : 0;
   const windowEnd = Math.min(safePrompt.length, Math.max(1400, focusIndex + 980));
   const visiblePrompt = safePrompt.slice(windowStart, windowEnd);
-  const heightClass = tall ? "max-h-[720px] min-h-[720px]" : "max-h-[560px] min-h-[560px]";
+  const heightClass = tall ? "typing-panel typing-panel-tall" : "typing-panel";
 
   useEffect(() => {
     const container = containerRef.current;
@@ -2835,7 +2835,7 @@ const TypingText = React.forwardRef<HTMLDivElement, {
         if (typeof ref === "function") ref(node);
         else if (ref) ref.current = node;
       }}
-      className={`type-text ${heightClass} cursor-text overflow-hidden rounded-lg border border-line bg-surface/90 p-9 text-4xl leading-[4.1rem] shadow-glow outline-none ring-mint/30 backdrop-blur-xl transition focus:ring-4 ${code ? "font-mono text-2xl leading-[3.15rem]" : "font-sans"} ${active ? "border-mint" : ""}`}
+      className={`type-text ${heightClass} cursor-text overflow-hidden rounded-lg border border-line bg-surface/90 p-4 text-2xl leading-[2.8rem] sm:p-6 sm:text-3xl sm:leading-[3.4rem] lg:p-9 lg:text-4xl lg:leading-[4.1rem] shadow-glow outline-none ring-mint/30 backdrop-blur-xl transition focus:ring-4 ${code ? "typing-code font-mono" : "font-sans"} ${active ? "border-mint" : ""}`}
       role="textbox"
       tabIndex={0}
       onKeyDown={onKeyDown}

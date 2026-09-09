@@ -26,6 +26,28 @@
 .app-shell .glass-panel::before { display: none; }
 .app-shell .glass-panel { box-shadow: none; }
 
+.app-shell .grid > *, .auth-stage .grid > * { min-width: 0; }
+.app-shell input, .app-shell select, .auth-stage input { min-width: 0; max-width: 100%; }
+.app-shell p, .app-shell h3 { overflow-wrap: anywhere; }
+.score-table { max-width: 100%; overscroll-behavior-x: contain; }
+.score-table > * { min-width: 680px; }
+.score-table:has([class*="42px_1fr"]) > * { min-width: 340px; }
+.score-table:focus-visible { outline: 2px solid rgb(var(--color-mint)); outline-offset: 2px; }
+.typing-panel { height: clamp(300px, 58svh, 560px); }
+.typing-panel-tall { height: clamp(340px, 68svh, 720px); }
+.type-text.typing-code { font-size: clamp(1rem, 1.8vw, 1.5rem); line-height: 1.9; overflow-wrap: anywhere; }
+.challenge-stack { max-height: calc(100dvh - 104px); bottom: max(20px, env(safe-area-inset-bottom)); }
+.header-popover { max-height: calc(100dvh - 100px); overflow-y: auto; }
+#mobile-navigation { max-height: calc(100dvh - 80px); overflow-y: auto; }
+
+@media (max-width: 639px) {
+  .auth-stage { padding: 20px 12px; }
+  .auth-headline { font-size: clamp(2.25rem, 9vw, 3rem); }
+  .app-shell .type-text { overflow-wrap: anywhere; }
+  .site-header #account-panel { position: fixed; top: 80px; right: 12px; width: min(256px, calc(100vw - 24px)); }
+  .app-shell input, .app-shell select, .auth-stage input { font-size: 16px; }
+}
+
 .nav-wordmark { display: inline-flex; white-space: nowrap; }
 .nav-letter { display: inline-block; animation: brand-letter-enter 420ms ease-out both; animation-delay: var(--letter-delay); }
 .nav-letter > span { display: inline-block; }

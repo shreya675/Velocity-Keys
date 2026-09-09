@@ -7,7 +7,7 @@ export function ChallengeInbox({ invitations, userId, now, busy, pending, connec
   invitations: RaceInvitation[]; userId: string; now: number; busy: boolean; pending: boolean; connected: boolean;
   onRespond: (id: string, action: "accept" | "decline" | "cancel") => void;
 }) {
-  return <aside aria-label="Race invitations" className="fixed bottom-5 left-4 right-4 z-50 mx-auto max-w-md space-y-3 sm:left-auto sm:right-6 sm:w-96">
+  return <aside aria-label="Race invitations" className="challenge-stack fixed bottom-5 left-4 right-4 z-50 mx-auto max-w-md space-y-3 overflow-y-auto sm:left-auto sm:right-6 sm:w-96">
     {invitations.map((invite) => {
       const incoming = invite.to.id === userId;
       const remaining = Math.max(0, Math.ceil((invite.expiresAt - now) / 1000));

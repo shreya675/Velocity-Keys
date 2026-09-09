@@ -45,10 +45,10 @@ export function SiteHeader({ user, activeView, notifications, friendCount, onRea
     if (event.relatedTarget && !event.currentTarget.contains(event.relatedTarget)) setOpen(null);
   }}>
     <a href="#page-content" className="sr-only z-50 rounded bg-mint px-4 py-2 text-panel focus:not-sr-only focus:absolute focus:left-4 focus:top-4">Skip to content</a>
-    <div className="mx-auto flex h-[72px] max-w-[1440px] items-center gap-8 px-5 lg:h-20 lg:px-8">
+    <div className="mx-auto flex h-[72px] max-w-[1440px] items-center gap-2 px-3 sm:gap-5 sm:px-5 lg:h-20 lg:gap-8 lg:px-8">
       <Link href="/practice" onClick={close} aria-label="Velocity Keys home" className="nav-brand flex shrink-0 items-center gap-2.5 text-lg font-bold tracking-tight lg:text-[22px]">
         <span className="nav-brand-icon flex h-8 w-8 items-center justify-center rounded-lg bg-mint text-panel lg:h-10 lg:w-10"><Keyboard className="h-5 w-5 lg:h-6 lg:w-6" /></span>
-        <span aria-hidden="true" className="nav-wordmark">{"velocitykeys.".split("").map((letter, index) => (
+        <span aria-hidden="true" className="nav-wordmark max-[359px]:text-sm">{"velocitykeys.".split("").map((letter, index) => (
           <span key={index} className={`nav-letter ${index === 12 ? "text-mint" : index >= 8 ? "font-normal text-muted" : ""}`} style={{ "--letter-delay": `${index * 45}ms` } as CSSProperties}><span>{letter}</span></span>
         ))}</span>
       </Link>
@@ -62,7 +62,7 @@ export function SiteHeader({ user, activeView, notifications, friendCount, onRea
         <span className="nav-track-runner"><span /></span>
         {["W", "P", "M"].map((letter, index) => <span key={letter} className="nav-track-key" style={{ left: `${22 + index * 26}%`, animationDelay: `${index * 900 + 600}ms` }}>{letter}</span>)}
       </div>
-      <div className="ml-auto flex shrink-0 items-center gap-2">
+      <div className="ml-auto flex shrink-0 items-center gap-0 sm:gap-2">
         <div className="relative">
           <button ref={notificationsButton} aria-label="Notifications" aria-expanded={open === "notifications"} aria-controls="notification-panel" className="header-icon relative" onClick={() => { setOpen(open === "notifications" ? null : "notifications"); onReadNotifications(); }}>
             <Bell className="h-[18px] w-[18px]" />{notifications.length > 0 && <span className="absolute right-2 top-2 h-1.5 w-1.5 rounded-full bg-mint" />}
@@ -74,7 +74,7 @@ export function SiteHeader({ user, activeView, notifications, friendCount, onRea
             </div>
           </section>}
         </div>
-        <div className="relative border-l border-line pl-3">
+        <div className="relative border-l border-line pl-1 sm:pl-3">
           <button ref={accountButton} aria-label="Account menu" aria-expanded={open === "account"} aria-controls="account-panel" className="flex items-center gap-2 rounded-lg p-1 text-muted transition hover:text-ink" onClick={() => setOpen(open === "account" ? null : "account")}>
             <span className="flex h-8 w-8 items-center justify-center rounded-full border border-mint/25 bg-mint/10 text-xs font-bold text-mint">{user.username.slice(0, 2).toUpperCase()}</span>
             <ChevronDown aria-hidden="true" className={`h-3.5 w-3.5 transition-transform ${open === "account" ? "rotate-180" : ""}`} />
