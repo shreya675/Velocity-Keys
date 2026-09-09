@@ -26,6 +26,7 @@ type LiveRoom = {
   players: Map<string, RacePlayer>;
   events: Map<string, KeystrokePayload[]>;
   spectators: Set<string>;
+  invitedUserIds?: Set<string>;
 };
 
 const prompts = [
@@ -73,6 +74,34 @@ const raceCodePrompts: Record<CodeLanguage, string[]> = {
 export class RaceService {
   private rooms = new Map<string, LiveRoom>();
   private matchmaking: MatchmakingEntry[] = [];
+  private challengeReservations = new Set<string>();
+
+  updateUsername(userId: string, username: string) {
+    for (const entry of this.matchmaking) if (entry.user.id === userId) entry.user.username = username;
+    const snapshots: RaceSnapshot[] = [];
+    for (const room of this.rooms.values()) {
+      const player = room.players.get(userId);
+      if (player) { player.username = username; snapshots.push(this.snapshot(room)); }
+    }
+    return snapshots;
+  }
+
+  isUserBusy(userId: string) {
+    return this.matchmaking.some((entry) => entry.user.id === userId) ||
+      [...this.rooms.values()].some((room) => room.players.has(userId) &&
+        ["WAITING", "COUNTDOWN", "LIVE"].includes(room.status));
+  }
+
+  async createFriendDuel(users: ClientUser[]) {
+    if (users.some((user) => this.isUserBusy(user.id) || this.challengeReservations.has(user.id))) throw new Error("A player is already joining a race.");
+    users.forEach((user) => this.challengeReservations.add(user.id));
+    try {
+      return await this.createDuel(users, {
+        user: users[0], textMode: TextMode.PROSE, raceMode: "WORDS",
+        codeLanguage: "CPP", difficulty: "MEDIUM", durationSeconds: 60
+      });
+    } finally { users.forEach((user) => this.challengeReservations.delete(user.id)); }
+  }
 
   async createRoom(
     owner: ClientUser,
@@ -84,6 +113,7 @@ export class RaceService {
     durationSeconds = 120,
     raceMode: PracticeMode = practiceModeFromTextMode(textMode)
   ) {
+    if (this.challengeReservations.has(owner.id)) throw new Error("Your friend duel is being prepared.");
     const code = nanoid(6).toUpperCase();
     const safeDuration = normalizeRaceDuration(durationSeconds);
     const safeDifficulty = normalizeDifficulty(difficulty);
@@ -102,6 +132,7 @@ export class RaceService {
   }
 
   async joinRoom(code: string, user: ClientUser, spectator = false) {
+    if (this.challengeReservations.has(user.id)) throw new Error("Your friend duel is being prepared.");
     const normalized = code.trim().toUpperCase();
     let live = this.rooms.get(normalized);
     if (!live) {
@@ -129,6 +160,8 @@ export class RaceService {
       if (live.isDuel) throw new Error("Quick duels are private between two matched racers.");
       live.spectators.add(user.id);
     } else {
+      if (live.invitedUserIds && !live.invitedUserIds.has(user.id)) throw new Error("This duel is reserved for its invited players.");
+      if (live.players.has(user.id)) return this.snapshot(live);
       if (live.status !== "WAITING") throw new Error("This race has already started.");
       await this.addPlayer(live, user);
     }
@@ -181,6 +214,7 @@ export class RaceService {
     user: ClientUser,
     options: Partial<{ textMode: TextMode; raceMode: PracticeMode; codeLanguage: CodeLanguage; difficulty: PracticeDifficulty; durationSeconds: number }> = {}
   ) {
+    if (this.challengeReservations.has(user.id)) throw new Error("Your friend duel is being prepared.");
     const raceMode = normalizePracticeMode(options.raceMode ?? practiceModeFromTextMode(options.textMode ?? TextMode.PROSE));
     const entry: MatchmakingEntry = {
       user,
@@ -333,6 +367,7 @@ export class RaceService {
     });
     const race = await prisma.race.create({ data: { roomId: room.id, prompt, status: "WAITING" } });
     const live = this.createLiveRoom(code, room.id, race.id, prompt, true, true, 2, options.textMode, options.raceMode, options.codeLanguage, options.difficulty, options.durationSeconds);
+    live.invitedUserIds = new Set(users.map((user) => user.id));
     for (const user of users) await this.addPlayer(live, user);
     return this.snapshot(live);
   }
@@ -556,7 +591,7 @@ function practiceModeFromTextMode(mode: TextMode): PracticeMode {
 function normalizeRaceDuration(value: unknown) {
   const seconds = Number(value);
   if (!Number.isFinite(seconds)) return 120;
-  return Math.min(900, Math.max(120, Math.round(seconds)));
+  return Math.min(900, Math.max(60, Math.round(seconds)));
 }
 
 function expandPrompt(base: string, durationSeconds: number) {

@@ -1,6 +1,13 @@
 "use client";
 
 import React, { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import Link from "next/link";
+import { usePathname, useRouter, useSearchParams } from "next/navigation";
+import { SiteHeader } from "./site-header";
+import { isSection, sections, type ActiveView } from "@/lib/navigation";
+import { useFriendChallenges } from "./use-friend-challenges";
+import { ChallengeInbox } from "./challenge-inbox";
+import type { FriendPresence } from "../lib/types";
 import { io, type Socket } from "socket.io-client";
 import { Activity, Award, BarChart3, Bell, BookOpen, Braces, CalendarDays, Check, Copy, Eye, Flag, Gauge, History, Keyboard, Link as LinkIcon, Lock, LogIn, LogOut, Moon, Palette, Play, Plus, Quote, Radar, Settings, Sparkles, Square, Sun, Target, Timer, Trash2, Trophy, UserPlus, Users, WholeWord, X } from "lucide-react";
 import { calculateAccuracy, calculateConsistency, calculateWpm, levelForRating, practiceScore } from "@/lib/race-math";
@@ -8,7 +15,6 @@ import type { AnalyticsSummary, ClientUser, CodeLanguage, DailyChallengeSummary,
 
 type AuthMode = "login" | "register";
 type ApiResult<T> = T & { error?: string };
-type ActiveView = "practice" | "race" | "daily" | "friends" | "leaderboard" | "history" | "profile" | "settings" | "help";
 type Theme = "light" | "dark";
 type ThemeShade = "mint" | "ocean" | "violet" | "rose" | "amber" | "forest" | "slate" | "crimson" | "indigo" | "lime" | "cyan" | "orchid";
 type ErrorLockMode = "off" | "word" | "letter";
@@ -32,6 +38,14 @@ declare global {
 }
 
 export default function Home() {
+  const pathname = usePathname();
+  const router = useRouter();
+  const searchParams = useSearchParams();
+  const section = pathname.split("/")[1];
+  const activeView: ActiveView = isSection(section) ? section : "practice";
+  const setActiveView = useCallback((view: ActiveView) => router.push(`/${view}`), [router]);
+  const profileId = searchParams.get("user") ?? "me";
+  const routeRoom = searchParams.get("room")?.trim().toUpperCase() ?? "";
   const [token, setToken] = useState<string>("");
   const [user, setUser] = useState<ClientUser | null>(null);
   const [authMode, setAuthMode] = useState<AuthMode>("login");
@@ -46,8 +60,6 @@ export default function Home() {
   const [autoFocusTyping, setAutoFocusTyping] = useState(true);
   const [finishEffects, setFinishEffects] = useState(true);
   const [socket, setSocket] = useState<Socket | null>(null);
-  const [activeView, setActiveView] = useState<ActiveView>("practice");
-  const [helpOpen, setHelpOpen] = useState(false);
   const [snapshot, setSnapshot] = useState<RaceSnapshot | null>(null);
   const [roomCode, setRoomCode] = useState("");
   const [publicRooms, setPublicRooms] = useState<PublicRoomSummary[]>([]);
@@ -71,8 +83,6 @@ export default function Home() {
   const [myProfile, setMyProfile] = useState<LeaderboardUser | null>(null);
   const [friends, setFriends] = useState<FriendsSummary | null>(null);
   const [friendNoticeCount, setFriendNoticeCount] = useState(0);
-  const [notificationsOpen, setNotificationsOpen] = useState(false);
-  const [dismissedNotificationIds, setDismissedNotificationIds] = useState<string[]>([]);
   const [liveNotifications, setLiveNotifications] = useState<HeaderNotification[]>([]);
   const [friendUsername, setFriendUsername] = useState("");
   const [friendRemovalCandidate, setFriendRemovalCandidate] = useState<string | null>(null);
@@ -101,7 +111,12 @@ export default function Home() {
   const raceStartedAtRef = useRef(0);
   const lastStrokeAtRef = useRef(0);
   const lastTimerTickRef = useRef("");
+  const joiningInviteRef = useRef(false);
   const googleClientId = process.env.NEXT_PUBLIC_GOOGLE_CLIENT_ID ?? "";
+  const socketPreferences = useRef({ autoFocusTyping, finishEffects, leaderboardScope });
+  useEffect(() => {
+    socketPreferences.current = { autoFocusTyping, finishEffects, leaderboardScope };
+  }, [autoFocusTyping, finishEffects, leaderboardScope]);
 
   const showToast = useCallback((message: string, tone: ToastTone = "info") => {
     const id = Date.now() + Math.floor(Math.random() * 1000);
@@ -111,6 +126,9 @@ export default function Home() {
     }, 3600);
   }, []);
 
+  const challengeBusy = isPracticeRunning || isDailyRunning || Boolean(snapshot && ["WAITING", "COUNTDOWN", "LIVE"].includes(snapshot.status));
+  const challenges = useFriendChallenges(user ? socket : null, challengeBusy, showToast);
+
   useEffect(() => {
     const savedToken = localStorage.getItem("vk_token") ?? "";
     const savedUser = localStorage.getItem("vk_user");
@@ -118,7 +136,6 @@ export default function Home() {
     const savedShade = localStorage.getItem("vk_theme_shade");
     const savedErrorLock = localStorage.getItem("vk_error_lock");
     const savedPaceTarget = Number(localStorage.getItem("vk_pace_target") ?? 60);
-    const inviteCode = new URLSearchParams(window.location.search).get("room")?.trim().toUpperCase() ?? "";
     if (savedToken) setToken(savedToken);
     if (savedUser) setUser(JSON.parse(savedUser));
     if (savedTheme === "dark" || savedTheme === "light") setTheme(savedTheme);
@@ -130,12 +147,14 @@ export default function Home() {
     setAutoFocusTyping(localStorage.getItem("vk_auto_focus") !== "0");
     setFinishEffects(localStorage.getItem("vk_finish_effects") !== "0");
     setAppOrigin(process.env.NEXT_PUBLIC_APP_URL ?? window.location.origin);
-    if (inviteCode) {
-      setPendingInviteCode(inviteCode);
-      setRoomCode(inviteCode);
-      setActiveView("race");
-    }
   }, []);
+
+  useEffect(() => {
+    if (activeView === "race" && routeRoom && routeRoom !== snapshot?.roomCode) {
+      setPendingInviteCode(routeRoom);
+      setRoomCode(routeRoom);
+    }
+  }, [activeView, routeRoom, snapshot?.roomCode]);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -182,17 +201,17 @@ export default function Home() {
         const now = nextSnapshot.startsAt ?? Date.now();
         raceStartedAtRef.current = now;
         setRaceStartedAt(now);
-        if (autoFocusTyping) inputRef.current?.focus();
+        if (socketPreferences.current.autoFocusTyping) inputRef.current?.focus();
       }
-      if (nextSnapshot.status === "FINISHED" && finishEffects) {
+      if (nextSnapshot.status === "FINISHED" && socketPreferences.current.finishEffects) {
         setCelebrate(true);
         window.setTimeout(() => setCelebrate(false), 1800);
       }
     });
-    nextSocket.on("matchmaking:matched", (nextSnapshot: RaceSnapshot) => {
+    const enterDuel = (nextSnapshot: RaceSnapshot) => {
       const nextRaceMode = nextSnapshot.raceMode ?? "WORDS";
       setSnapshot(nextSnapshot);
-      setActiveView("race");
+      router.push(`/race?room=${encodeURIComponent(nextSnapshot.roomCode)}`);
       setTyped("");
       setRoomCode(nextSnapshot.roomCode);
       setRoomVisibility(nextSnapshot.isPrivate ? "private" : "public");
@@ -205,7 +224,9 @@ export default function Home() {
       setRaceStartedAt(0);
       setLastStrokeAt(0);
       showToast("Quick Duel found. Press Start Race when you are ready.", "success");
-    });
+    };
+    nextSocket.on("matchmaking:matched", enterDuel);
+    nextSocket.on("challenge:matched", enterDuel);
     nextSocket.on("friend:request", (request: FriendRequestSummary) => {
       setFriends((current) => {
         if (!current) return current;
@@ -231,7 +252,7 @@ export default function Home() {
       void api<ApiResult<FriendsSummary>>("/api/friends", { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }).then((result) => {
         if (!result.error) setFriends(result);
       });
-      if (leaderboardScope === "friends") {
+      if (socketPreferences.current.leaderboardScope === "friends") {
         void api<ApiResult<LeaderboardSummary>>("/api/leaderboard?scope=friends", { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }).then((result) => {
           if (!result.error) setLeaderboard(result);
         });
@@ -242,7 +263,7 @@ export default function Home() {
       void api<ApiResult<FriendsSummary>>("/api/friends", { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }).then((result) => {
         if (!result.error) setFriends(result);
       });
-      if (leaderboardScope === "friends") {
+      if (socketPreferences.current.leaderboardScope === "friends") {
         void api<ApiResult<LeaderboardSummary>>("/api/leaderboard?scope=friends", { headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json" } }).then((result) => {
           if (!result.error) setLeaderboard(result);
         });
@@ -252,7 +273,18 @@ export default function Home() {
     return () => {
       nextSocket.disconnect();
     };
-  }, [autoFocusTyping, finishEffects, leaderboardScope, showToast, token]);
+  }, [router, showToast, token]);
+
+  useEffect(() => {
+    if (!socket || !snapshot) return;
+    const rejoin = () => socket.emit("room:join", { code: snapshot.roomCode });
+    socket.on("connect", rejoin);
+    return () => { socket.off("connect", rejoin); };
+  }, [socket, snapshot?.roomCode]);
+
+  useEffect(() => {
+    if (socket?.connected) socket.emit("friends:sync");
+  }, [socket, friends]);
 
   useEffect(() => {
     const id = window.setInterval(() => setClock(Date.now()), 250);
@@ -260,6 +292,27 @@ export default function Home() {
   }, []);
 
   const authHeaders = useMemo(() => ({ Authorization: `Bearer ${token}`, "Content-Type": "application/json" }), [token]);
+
+  const applyAccountUpdate = useCallback((updated: ClientUser) => {
+    setUser(updated);
+    localStorage.setItem("vk_user", JSON.stringify(updated));
+    setMyProfile((current) => current ? { ...current, username: updated.username } : current);
+    setProfileUser((current) => current?.id === updated.id ? { ...current, username: updated.username } : current);
+  }, []);
+
+  useEffect(() => {
+    if (!socket) return;
+    socket.on("account:updated", applyAccountUpdate);
+    return () => { socket.off("account:updated", applyAccountUpdate); };
+  }, [socket, applyAccountUpdate]);
+
+  const changeUsername = async (username: string) => {
+    const result = await api<ApiResult<{ user: ClientUser }>>("/api/account/username", {
+      method: "PATCH", headers: authHeaders, body: JSON.stringify({ username })
+    });
+    if (result.error || !result.user) throw new Error(result.error || "Could not update your username.");
+    applyAccountUpdate(result.user);
+  };
 
   const me = snapshot?.players.find((player) => player.userId === user?.id);
   const safeAnalytics = normalizeAnalytics(analytics);
@@ -283,20 +336,8 @@ export default function Home() {
       }));
     return [...liveNotifications, ...friendItems, ...achievementItems]
       .sort((a, b) => new Date(b.date).getTime() - new Date(a.date).getTime())
-      .filter((notification) => !dismissedNotificationIds.includes(notification.id))
       .slice(0, 5);
-  }, [dismissedNotificationIds, friends?.incoming, liveNotifications, myProfile?.achievements]);
-  const notificationCount = Math.min(9, headerNotifications.length);
-
-  useEffect(() => {
-    if (!notificationsOpen || !headerNotifications.length) return;
-    const seenIds = headerNotifications.map((notification) => notification.id);
-    const timeoutId = window.setTimeout(() => {
-      setDismissedNotificationIds((current) => Array.from(new Set([...current, ...seenIds])).slice(-80));
-      setLiveNotifications((items) => items.filter((item) => !seenIds.includes(item.id)));
-    }, 7000);
-    return () => window.clearTimeout(timeoutId);
-  }, [headerNotifications, notificationsOpen]);
+  }, [friends?.incoming, liveNotifications, myProfile?.achievements]);
   const target = activeView === "race" ? snapshot?.prompt ?? "" : activeView === "daily" ? dailyChallenge?.prompt ?? "" : practicePrompt;
   const finished = Boolean(snapshot && typed === snapshot.prompt);
   const countdown = snapshot?.startsAt ? Math.max(0, Math.ceil((snapshot.startsAt - clock) / 1000)) : snapshot?.countdownSeconds ?? 0;
@@ -304,7 +345,7 @@ export default function Home() {
   const readyCount = snapshot?.readyUserIds.length ?? 0;
   const racerCount = snapshot?.players.length ?? 0;
   const amReady = Boolean(user && snapshot?.readyUserIds.includes(user.id));
-  const raceSettingsLocked = Boolean(snapshot && snapshot.status !== "FINISHED");
+  const raceSettingsLocked = Boolean(snapshot && !["FINISHED", "CANCELLED"].includes(snapshot.status));
   const roomTitle = snapshot?.isDuel ? `Quick Duel ${snapshot.roomCode}` : snapshot ? `${snapshot.isPrivate ? "Private" : "Public"} Room ${snapshot.roomCode}` : "Race Track";
   const practiceElapsedMs = isPracticeRunning ? Math.max(0, clock - practiceStartedAt) : practiceStartedAt ? Math.min(practiceDuration * 1000, clock - practiceStartedAt) : 0;
   const practiceRemaining = isPracticeRunning ? Math.max(0, practiceDuration - Math.floor(practiceElapsedMs / 1000)) : practiceDuration;
@@ -312,27 +353,28 @@ export default function Home() {
   const customTimerSeconds = practiceDuration % 60;
   const practiceMetrics = useMemo(() => {
     const elapsedMs = isPracticeRunning ? Math.max(practiceElapsedMs, 1) : Math.max(practiceEvents.at(-1)?.elapsedMs ?? practiceElapsedMs, 1);
-    const errors = typed.split("").filter((char, index) => char !== target[index]).length;
-    const correctChars = typed.split("").filter((char, index) => char === target[index]).length;
+    const errors = typed.split("").filter((char, index) => char !== practicePrompt[index]).length;
+    const correctChars = typed.split("").filter((char, index) => char === practicePrompt[index]).length;
     const wpm = Math.round(calculateWpm(correctChars, elapsedMs));
     const accuracy = Math.round(calculateAccuracy(Math.max(typed.length, 1), errors) * 10) / 10;
     const consistency = Math.round(calculateConsistency(practiceEvents));
-    const score = typed.length ? practiceScore({ wpm, accuracy, consistency, errors, durationSeconds: practiceDuration, currentRating: user?.rating ?? 0, difficulty: practiceDifficulty, typedChars: typed.length, promptLength: target.length }) : 0;
+    const score = typed.length ? practiceScore({ wpm, accuracy, consistency, errors, durationSeconds: practiceDuration, currentRating: user?.rating ?? 0, difficulty: practiceDifficulty, typedChars: typed.length, promptLength: practicePrompt.length }) : 0;
     return { wpm, accuracy, consistency, score, errors };
-  }, [isPracticeRunning, practiceDifficulty, practiceDuration, practiceElapsedMs, practiceEvents, target, typed, user?.rating]);
+  }, [isPracticeRunning, practiceDifficulty, practiceDuration, practiceElapsedMs, practiceEvents, practicePrompt, typed, user?.rating]);
   const dailyDuration = dailyChallenge?.durationSeconds ?? 60;
   const dailyElapsedMs = isDailyRunning ? Math.max(0, clock - dailyStartedAt) : dailyStartedAt ? Math.min(dailyDuration * 1000, clock - dailyStartedAt) : 0;
   const dailyRemaining = isDailyRunning ? Math.max(0, dailyDuration - Math.floor(dailyElapsedMs / 1000)) : dailyDuration;
   const dailyMetrics = useMemo(() => {
+    const dailyPrompt = dailyChallenge?.prompt ?? "";
     const elapsedMs = isDailyRunning ? Math.max(dailyElapsedMs, 1) : Math.max(dailyEvents.at(-1)?.elapsedMs ?? dailyElapsedMs, 1);
-    const errors = typed.split("").filter((char, index) => char !== target[index]).length;
-    const correctChars = typed.split("").filter((char, index) => char === target[index]).length;
+    const errors = typed.split("").filter((char, index) => char !== dailyPrompt[index]).length;
+    const correctChars = typed.split("").filter((char, index) => char === dailyPrompt[index]).length;
     const wpm = Math.round(calculateWpm(correctChars, elapsedMs));
     const accuracy = Math.round(calculateAccuracy(Math.max(typed.length, 1), errors) * 10) / 10;
     const consistency = Math.round(calculateConsistency(dailyEvents));
-    const score = typed.length ? practiceScore({ wpm, accuracy, consistency, errors, durationSeconds: dailyDuration, currentRating: user?.rating ?? 0, difficulty: "MEDIUM", typedChars: typed.length, promptLength: target.length }) : 0;
+    const score = typed.length ? practiceScore({ wpm, accuracy, consistency, errors, durationSeconds: dailyDuration, currentRating: user?.rating ?? 0, difficulty: "MEDIUM", typedChars: typed.length, promptLength: dailyPrompt.length }) : 0;
     return { wpm, accuracy, consistency, score, errors };
-  }, [dailyDuration, dailyElapsedMs, dailyEvents, isDailyRunning, target, typed, user?.rating]);
+  }, [dailyDuration, dailyElapsedMs, dailyEvents, isDailyRunning, dailyChallenge?.prompt, typed, user?.rating]);
 
   const submitAuth = async () => {
     setAuthError("");
@@ -459,6 +501,14 @@ export default function Home() {
     setMyProfile(result.user);
   }, [authHeaders, token]);
 
+  useEffect(() => {
+    if (activeView === "profile") {
+      setProfileUser(null);
+      void loadProfile(profileId);
+    }
+    if (activeView === "friends") setFriendNoticeCount(0);
+  }, [activeView, profileId, loadProfile]);
+
   const loadFriends = useCallback(async () => {
     if (!token) return;
     const result = await api<ApiResult<FriendsSummary>>("/api/friends", { headers: authHeaders });
@@ -563,6 +613,10 @@ export default function Home() {
   }, [authHeaders, showToast, token]);
 
   const loadPractice = async (mode = practiceMode, duration = practiceDuration, difficulty = practiceDifficulty, language = codeLanguage) => {
+    if (isDailyRunning || raceSettingsLocked) {
+      showToast("Finish your daily challenge or leave your race room before starting practice.", "info");
+      return "";
+    }
     const nextDuration = normalizePracticeDuration(duration);
     const result = await api<ApiResult<{ prompt: string; vocabulary?: VocabularyEntry[] }>>(`/api/practice?mode=${mode}&duration=${nextDuration}&difficulty=${difficulty}&codeLanguage=${language}`, { headers: authHeaders });
     if (result.error || !result.prompt) {
@@ -589,7 +643,6 @@ export default function Home() {
     setPracticeResult(null);
     setPracticeSaved(false);
     setIsPracticeRunning(false);
-    setActiveView("practice");
     showToast("Practice prompt ready. Pick a timer and press Start Practice.");
     return result.prompt;
   };
@@ -652,13 +705,14 @@ export default function Home() {
   }, [activeView, leaderboardScope, loadDailyChallenge, loadFriends, loadLeaderboard, loadPracticeHistory, loadPublicRooms, raceSettingsLocked, roomVisibility]);
 
   const createRoom = async (isPrivate: boolean) => {
+    if (isPracticeRunning || isDailyRunning) { showToast("Finish your current test before joining a race."); return; }
     const result = await api<RaceSnapshot>("/api/rooms", {
       method: "POST",
       headers: authHeaders,
       body: JSON.stringify({ isPrivate, textMode: textModeForPracticeMode(raceMode), raceMode, customText, codeLanguage, difficulty: raceDifficulty, durationSeconds: raceDuration })
     });
     setSnapshot(result);
-    setActiveView("race");
+    router.push(`/race?room=${encodeURIComponent(result.roomCode)}`);
     setTyped("");
     setRoomCode(result.roomCode);
     setRoomVisibility(result.isPrivate ? "private" : "public");
@@ -666,13 +720,13 @@ export default function Home() {
     setRaceDuration(result.durationSeconds);
     setRaceMode(result.raceMode ?? "WORDS");
     setTextMode(textModeForPracticeMode(result.raceMode ?? "WORDS"));
-    window.history.replaceState(null, "", `?room=${result.roomCode}`);
     if (isPrivate) showToast("Private invite link is ready to copy.", "success");
     if (!isPrivate) void loadPublicRooms();
     socket?.emit("room:join", { code: result.roomCode });
   };
 
   const joinRoomByCode = useCallback(async (code: string, spectator = false) => {
+    if (isPracticeRunning || isDailyRunning) { showToast("Finish your current test before joining a race."); return null; }
     const normalizedCode = code.trim().toUpperCase();
     if (!normalizedCode) {
       showToast("Enter a room code or open an invite link.", "error");
@@ -688,7 +742,7 @@ export default function Home() {
       return null;
     }
     setSnapshot(result);
-    setActiveView("race");
+    router.push(`/race?room=${encodeURIComponent(result.roomCode)}`);
     setTyped("");
     setRoomCode(result.roomCode);
     setRoomVisibility(result.isPrivate ? "private" : "public");
@@ -696,11 +750,10 @@ export default function Home() {
     setRaceDuration(result.durationSeconds);
     setRaceMode(result.raceMode ?? "WORDS");
     setTextMode(textModeForPracticeMode(result.raceMode ?? "WORDS"));
-    window.history.replaceState(null, "", `?room=${result.roomCode}`);
     void loadPublicRooms();
     socket?.emit("room:join", { code: result.roomCode, spectator });
     return result;
-  }, [authHeaders, loadPublicRooms, showToast, socket]);
+  }, [authHeaders, isDailyRunning, isPracticeRunning, loadPublicRooms, router, showToast, socket]);
 
   const joinRoom = async (spectator = false) => {
     await joinRoomByCode(roomCode, spectator);
@@ -711,7 +764,7 @@ export default function Home() {
       showToast("Create or join a room first.", "error");
       return;
     }
-    const inviteLink = `${appOrigin || window.location.origin}?room=${snapshot.roomCode}`;
+    const inviteLink = `${appOrigin || window.location.origin}/race?room=${encodeURIComponent(snapshot.roomCode)}`;
     try {
       await navigator.clipboard.writeText(inviteLink);
       showToast("Invite link copied. Send it to your friend.", "success");
@@ -721,15 +774,17 @@ export default function Home() {
   };
 
   useEffect(() => {
-    if (!pendingInviteCode || !token || !user || !socket) return;
+    if (!pendingInviteCode || !token || !user || !socket || joiningInviteRef.current) return;
+    joiningInviteRef.current = true;
     void joinRoomByCode(pendingInviteCode).then((result) => {
-      if (!result) return;
       setPendingInviteCode("");
+      if (!result) return;
       showToast(`Joined room ${result.roomCode} from invite link.`, "success");
-    });
+    }).finally(() => { joiningInviteRef.current = false; });
   }, [joinRoomByCode, pendingInviteCode, showToast, socket, token, user]);
 
   const matchmake = async () => {
+    if (isPracticeRunning || isDailyRunning) { showToast("Finish your current test before joining a race."); return; }
     const result = await api<{ matched: boolean; snapshot?: RaceSnapshot }>("/api/matchmaking", {
       method: "POST",
       headers: authHeaders,
@@ -740,7 +795,7 @@ export default function Home() {
       return;
     }
     setSnapshot(result.snapshot);
-    setActiveView("race");
+    router.push(`/race?room=${encodeURIComponent(result.snapshot.roomCode)}`);
     setRoomCode(result.snapshot.roomCode);
     setRoomVisibility(result.snapshot.isPrivate ? "private" : "public");
     setRaceDifficulty(result.snapshot.difficulty);
@@ -759,6 +814,9 @@ export default function Home() {
     setMyProfile(null);
     setProfileUser(null);
     setTyped("");
+    setIsPracticeRunning(false);
+    setIsDailyRunning(false);
+    setFriends(null);
     localStorage.removeItem("vk_token");
     localStorage.removeItem("vk_user");
     showToast("Logged out.", "success");
@@ -804,7 +862,7 @@ export default function Home() {
     lastStrokeAtRef.current = 0;
     setRaceStartedAt(0);
     setLastStrokeAt(0);
-    window.history.replaceState(null, "", window.location.pathname);
+    router.replace("/race");
     showToast(`Left room ${leavingCode}.`, "success");
     void loadPublicRooms();
   };
@@ -837,6 +895,10 @@ export default function Home() {
   };
 
   const startDailyChallenge = async () => {
+    if (isPracticeRunning || raceSettingsLocked) {
+      showToast("Finish practice or leave your race room before starting the daily challenge.", "info");
+      return;
+    }
     const challenge = dailyChallenge ?? await loadDailyChallenge();
     if (!challenge) return;
     const now = Date.now();
@@ -908,7 +970,8 @@ export default function Home() {
         wpm: dailyMetrics.wpm,
         accuracy: dailyMetrics.accuracy,
         consistency: dailyMetrics.consistency,
-        errors: dailyMetrics.errors
+        errors: dailyMetrics.errors,
+        typed
       })
     });
     if (result.error) {
@@ -922,7 +985,7 @@ export default function Home() {
       window.setTimeout(() => setCelebrate(false), 3200);
     }
     void loadMyProfile();
-  }, [authHeaders, dailyChallenge, dailyMetrics.accuracy, dailyMetrics.consistency, dailyMetrics.errors, dailyMetrics.score, dailyMetrics.wpm, dailySaved, finishEffects, isDailyRunning, loadMyProfile, showToast]);
+  }, [authHeaders, dailyChallenge, dailyMetrics.accuracy, dailyMetrics.consistency, dailyMetrics.errors, dailyMetrics.score, dailyMetrics.wpm, dailySaved, finishEffects, isDailyRunning, loadMyProfile, showToast, typed]);
 
   useEffect(() => {
     if (isPracticeRunning && practiceRemaining <= 0) {
@@ -931,10 +994,10 @@ export default function Home() {
   }, [finishPractice, isPracticeRunning, practiceRemaining]);
 
   useEffect(() => {
-    if (isDailyRunning && (dailyRemaining <= 0 || typed.length >= target.length)) {
+    if (isDailyRunning && (dailyRemaining <= 0 || typed.length >= (dailyChallenge?.prompt.length ?? Infinity))) {
       void finishDailyChallenge();
     }
-  }, [dailyRemaining, finishDailyChallenge, isDailyRunning, target.length, typed.length]);
+  }, [dailyChallenge?.prompt.length, dailyRemaining, finishDailyChallenge, isDailyRunning, typed.length]);
 
   useEffect(() => {
     const timerState = activeView === "practice" && isPracticeRunning
@@ -964,7 +1027,7 @@ export default function Home() {
         if (activeView === "daily") void startDailyChallenge();
         if (activeView === "practice") void startPractice();
       }
-      if (event.key === "Tab" && activeView === "practice") {
+      if (event.key === "Tab" && activeView === "practice" && event.target === inputRef.current) {
         event.preventDefault();
         switchPracticeMode();
       }
@@ -1181,114 +1244,18 @@ export default function Home() {
   }
 
   return (
-      <main className="min-h-screen px-4 py-5 text-ink md:px-8">
+    <div className="app-shell min-h-screen bg-panel text-ink">
       <ToastStack toasts={toasts} />
       {celebrate && <FinishCelebration />}
       {snapshot?.status === "COUNTDOWN" && <RaceCountdownOverlay countdown={countdown} />}
-      <header className="app-header glass-panel mx-auto mb-6 flex max-w-[1500px] flex-col gap-5 rounded-lg border border-line bg-panel/80 px-5 py-5 shadow-soft backdrop-blur-xl">
-        <div className="flex w-full flex-wrap items-start justify-between gap-4">
-          <div className="w-full">
-          <div className="grid w-full grid-cols-[auto_minmax(96px,1fr)] items-center gap-4">
-            <h1 className="velocity-title text-4xl font-black md:text-6xl">Velocity Keys</h1>
-            <div className="title-typing-lane" aria-hidden="true">
-              <span className="title-lane-line" />
-              <span className="title-cursor" />
-              <span className="title-key title-key-a">W</span>
-              <span className="title-key title-key-b">P</span>
-              <span className="title-key title-key-c">M</span>
-            </div>
-          </div>
-            <div className="mt-1 flex flex-wrap items-center gap-2 text-base font-semibold text-muted md:text-lg">
-              <button
-                className="font-bold text-ink underline-offset-4 transition hover:text-mint hover:underline"
-                onClick={() => {
-                  setProfileUser(null);
-                  setActiveView("profile");
-                  void loadProfile();
-                }}
-              >
-                {user.username}
-              </button>
-              <span>·</span>
-              <span title="Skill rating">{user.rating}</span>
-              <span>·</span>
-              <span>{levelForRating(user.rating)}</span>
-              <div className="relative">
-                <button
-                  className={iconButton}
-                  title="Notifications"
-                  onClick={() => {
-                    setNotificationsOpen((open) => !open);
-                    setFriendNoticeCount(0);
-                  }}
-                >
-                  <Bell className="h-4 w-4" />
-                  {notificationCount > 0 && (
-                    <span className="absolute -right-1 -top-1 flex h-4 min-w-4 items-center justify-center rounded-full bg-coral px-1 font-mono text-[9px] font-black text-white">
-                      {notificationCount}
-                    </span>
-                  )}
-                </button>
-                {notificationsOpen && (
-                  <div className="notification-popover absolute left-0 top-12 z-[100] w-[min(340px,calc(100vw-3rem))] rounded-lg border border-line bg-panel/95 p-3 shadow-glow backdrop-blur-xl">
-                    <div className="mb-2 flex items-center justify-between gap-3">
-                      <div className="text-xs font-black uppercase text-muted">Notifications</div>
-                      <button className="text-xs font-black uppercase text-muted transition hover:text-ink" onClick={() => setNotificationsOpen(false)}>
-                        Close
-                      </button>
-                    </div>
-                    <div className="space-y-2">
-                      {headerNotifications.map((notification) => (
-                        <div className="rounded-lg border border-line bg-surface/75 p-3" key={notification.id}>
-                          <div className="flex items-start gap-2">
-                            {notification.icon}
-                            <div>
-                              <div className="text-sm font-black text-ink">{notification.title}</div>
-                              <div className="mt-1 text-xs font-semibold leading-5 text-muted">{notification.detail}</div>
-                            </div>
-                          </div>
-                        </div>
-                      ))}
-                      {!headerNotifications.length && (
-                        <div className="rounded-lg border border-dashed border-line bg-surface/55 p-4 text-sm font-semibold text-muted">
-                          No new notifications yet.
-                        </div>
-                      )}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          </div>
+      <SiteHeader user={user} activeView={activeView} notifications={headerNotifications} friendCount={friendNoticeCount}
+        raceHref={snapshot ? `/race?room=${encodeURIComponent(snapshot.roomCode)}` : "/race"}
+        onReadNotifications={() => setFriendNoticeCount(0)} onLogout={logout} />
+      <main id="page-content" tabIndex={-1} className="mx-auto max-w-[1440px] px-5 py-8 outline-none lg:px-8 lg:py-10">
+        <div className="mb-7 flex flex-wrap items-end justify-between gap-3">
+          <div><h1 className="text-2xl font-semibold tracking-tight md:text-3xl">{sections[activeView].title}</h1><p className="mt-2 text-sm text-muted">{sections[activeView].description}</p></div>
+          {activeView === "practice" && <Link href="/history" className="text-sm font-medium text-muted transition hover:text-ink">View typing history →</Link>}
         </div>
-        <nav className="grid w-full grid-cols-2 gap-2 sm:grid-cols-3 lg:grid-cols-5 2xl:grid-cols-9">
-          <button className={activeView === "practice" ? activeCompactButton : compactButton} onClick={() => { setActiveView("practice"); void loadPractice(); }}><Target className="h-4 w-4" /> Practice</button>
-          <button className={activeView === "race" ? activeCompactButton : compactButton} onClick={() => setActiveView("race")}><Users className="h-4 w-4" /> Race</button>
-          <button className={activeView === "daily" ? activeCompactButton : compactButton} onClick={() => { setActiveView("daily"); void loadDailyChallenge(); }}><CalendarDays className="h-4 w-4" /> Daily</button>
-          <button
-            className={`relative ${activeView === "friends" ? activeCompactButton : compactButton}`}
-            onClick={() => {
-              setActiveView("friends");
-              setFriendNoticeCount(0);
-              void loadFriends();
-            }}
-          >
-            <UserPlus className="h-4 w-4" /> Friends
-            {friendNoticeCount > 0 && (
-              <span className="absolute -right-2 -top-2 flex h-5 min-w-5 items-center justify-center rounded-full border border-panel bg-coral px-1 font-mono text-[10px] font-black text-white">
-                {friendNoticeCount > 9 ? "9+" : friendNoticeCount}
-              </span>
-            )}
-          </button>
-          <button className={activeView === "leaderboard" ? activeCompactButton : compactButton} onClick={() => setActiveView("leaderboard")}><Trophy className="h-4 w-4" /> Leaderboard</button>
-          <button className={activeView === "history" ? activeCompactButton : compactButton} onClick={() => { setActiveView("history"); void loadPracticeHistory(); }}><History className="h-4 w-4" /> History</button>
-          <button className={activeView === "profile" ? activeCompactButton : compactButton} onClick={() => { setProfileUser(null); setActiveView("profile"); void loadProfile(); }}><Users className="h-4 w-4" /> Profile</button>
-          <button className={activeView === "settings" ? activeCompactButton : compactButton} onClick={() => setActiveView("settings")}><Settings className="h-4 w-4" /> Settings</button>
-          <button className={compactButton} onClick={() => setHelpOpen(true)}><BookOpen className="h-4 w-4" /> How To Use</button>
-        </nav>
-      </header>
-      {helpOpen && <HowToUseModal onClose={() => setHelpOpen(false)} />}
-
       <section className={`mx-auto grid max-w-[1500px] gap-4 ${activeView === "leaderboard" || activeView === "history" || activeView === "settings" || activeView === "help" || activeView === "friends" || activeView === "daily" || activeView === "profile" ? "" : "xl:grid-cols-[minmax(0,1fr)_380px]"}`}>
         <section className="space-y-4">
           {activeView === "practice" && (
@@ -1304,7 +1271,7 @@ export default function Home() {
               scope={leaderboardScope}
               onOpenProfile={(profile) => {
                 setProfileUser(profile);
-                setActiveView("profile");
+                router.push(`/profile?user=${encodeURIComponent(profile.id)}`);
                 void loadProfile(profile.id);
               }}
               onScopeChange={(scope) => {
@@ -1330,6 +1297,10 @@ export default function Home() {
             />
           ) : activeView === "friends" ? (
             <FriendsView
+              presence={challenges.presence}
+              connected={challenges.connected}
+              challengeDisabled={challengeBusy || challenges.pending || challenges.invitations.length > 0}
+              onChallenge={challenges.send}
               friends={friends}
               username={friendUsername}
               onUsernameChange={setFriendUsername}
@@ -1338,14 +1309,18 @@ export default function Home() {
               onRemoveFriend={removeFriend}
               removalCandidateId={friendRemovalCandidate}
               onOpenProfile={(profileId) => {
-                setActiveView("profile");
+                router.push(`/profile?user=${encodeURIComponent(profileId)}`);
                 void loadProfile(profileId);
               }}
             />
           ) : activeView === "history" ? (
             <HistoryView history={practiceHistory} />
+          ) : activeView === "help" ? (
+            <HowToUseView />
           ) : activeView === "settings" ? (
             <SettingsView
+              username={user.username}
+              onUsernameChange={changeUsername}
               theme={theme}
               themeShade={themeShade}
               quietMistakes={quietMistakes}
@@ -1787,7 +1762,10 @@ export default function Home() {
           </Panel>
         </section>
       )}
-    </main>
+      </main>
+      <footer className="mx-auto flex max-w-[1440px] flex-wrap items-center justify-between gap-3 border-t border-line px-5 py-6 text-xs text-muted lg:px-8"><span>Velocity Keys</span><div className="flex gap-5"><Link href="/help" className="hover:text-ink">Help & shortcuts</Link><Link href="/settings" className="hover:text-ink">Settings</Link></div></footer>
+      <ChallengeInbox invitations={challenges.invitations} userId={user.id} now={clock} busy={challengeBusy} pending={challenges.pending} connected={challenges.connected} onRespond={challenges.respond} />
+    </div>
   );
 }
 
@@ -2009,6 +1987,10 @@ function LeaderboardView({
 }
 
 function FriendsView({
+  presence,
+  connected,
+  challengeDisabled,
+  onChallenge,
   friends,
   username,
   onUsernameChange,
@@ -2018,6 +2000,10 @@ function FriendsView({
   removalCandidateId,
   onOpenProfile
 }: {
+  presence: Record<string, FriendPresence>;
+  connected: boolean;
+  challengeDisabled: boolean;
+  onChallenge: (id: string) => void;
   friends: FriendsSummary | null;
   username: string;
   onUsernameChange: (value: string) => void;
@@ -2027,29 +2013,35 @@ function FriendsView({
   removalCandidateId: string | null;
   onOpenProfile: (profileId: string) => void;
 }) {
+  const [search, setSearch] = useState("");
+  const [onlineOnly, setOnlineOnly] = useState(false);
   const accepted = friends?.friends ?? [];
+  const available = accepted.filter((friend) => presence[friend.id] === "online").length;
+  const visible = accepted.filter((friend) => friend.username.toLowerCase().includes(search.toLowerCase()) && (!onlineOnly || presence[friend.id] === "online"))
+    .sort((a, b) => ({ online: 0, busy: 1, offline: 2 }[presence[a.id] ?? "offline"]) - ({ online: 0, busy: 1, offline: 2 }[presence[b.id] ?? "offline"]) || b.rating - a.rating);
   const incoming = friends?.incoming ?? [];
   const outgoing = friends?.outgoing ?? [];
 
   return (
-    <div className="space-y-4">
-      <Panel title="Friend System" icon={<UserPlus className="h-4 w-4" />}>
-        <div className="grid gap-2 sm:grid-cols-2 xl:grid-cols-4">
-          <Metric label="Friends" value={String(accepted.length)} />
-          <Metric label="Incoming" value={String(incoming.length)} />
-          <Metric label="Outgoing" value={String(outgoing.length)} />
-          <Metric label="Leaderboard" value="Friends" />
+    <div className="flex flex-col gap-4">
+      <section className="relative overflow-hidden rounded-2xl border border-mint/25 bg-gradient-to-br from-mint/15 via-panel to-sky/10 p-6 sm:p-8">
+        <div className="pointer-events-none absolute -right-8 -top-8 h-40 w-40 rounded-full border-[24px] border-mint/10" />
+        <p className="mb-3 flex items-center gap-2 text-xs font-bold uppercase tracking-[0.2em] text-mint"><Users className="h-4 w-4" /> Your racing circle</p>
+        <h2 className="relative text-3xl font-black tracking-tight sm:text-4xl">Better with a rival.</h2>
+        <p className="relative mt-3 max-w-lg text-sm leading-6 text-muted">Find your friends. Send a challenge. Turn a spare minute into a close finish.</p>
+        <div className="mt-6 flex flex-wrap gap-3">
+          <span className="flex items-center gap-2 rounded-full border border-mint/25 bg-panel/70 px-4 py-2 text-sm font-semibold"><span className={`h-2 w-2 rounded-full ${connected ? "bg-mint" : "bg-muted"}`} />{connected ? `${available} available now` : "Connecting to friends…"}</span>
+          <span className="rounded-full border border-line bg-panel/70 px-4 py-2 text-sm text-muted">{accepted.length} friends</span>
+          <span className="rounded-full border border-line bg-panel/70 px-4 py-2 text-sm text-muted">60-second private duels</span>
         </div>
-        <div className="mt-3 rounded-lg border border-line bg-surface/70 p-3 text-sm font-semibold text-muted">
-          Send a request by exact username, accept incoming requests, and compare accepted friends from the Friends tab on the leaderboard.
-        </div>
-      </Panel>
+      </section>
 
-      <Panel title="Friends" icon={<UserPlus className="h-4 w-4" />}>
+      <div className="order-3"><Panel title="Add to your circle" icon={<UserPlus className="h-4 w-4" />}>
         <div className="mb-4 grid gap-2 md:grid-cols-[minmax(0,1fr)_220px]">
           <input
             className="w-full rounded-lg border border-line bg-surface/85 px-3 py-2 outline-none ring-mint/30 transition focus:ring-4"
             placeholder="Enter exact username"
+            aria-label="Friend's exact username"
             value={username}
             onChange={(event) => onUsernameChange(event.target.value)}
             onKeyDown={(event) => {
@@ -2097,33 +2089,31 @@ function FriendsView({
         </div>
       </Panel>
 
-      <Panel title="My Friends" icon={<Users className="h-4 w-4" />}>
-        <div className="overflow-hidden rounded-lg border border-line bg-surface/65">
-          <div className="grid grid-cols-[1fr_100px_140px_140px] gap-3 border-b border-line bg-panel/75 px-3 py-2 text-[11px] font-black uppercase text-muted">
-            <span>User</span>
-            <span className="text-right">Rating</span>
-            <span className="text-right">Profile</span>
-            <span className="text-right">Remove</span>
-          </div>
-          {accepted.map((friend) => (
-            <div className="grid grid-cols-[1fr_100px_140px_140px] items-center gap-3 border-b border-line px-3 py-3 last:border-b-0" key={friend.id}>
-              <span>
-                <span className="block font-black">{friend.username}</span>
-                <span className="block text-xs font-semibold text-muted">{friend.level}</span>
-              </span>
-              <span className="text-right font-mono font-black">{friend.rating}</span>
-              <button className={secondaryButton} onClick={() => onOpenProfile(friend.id)}>Open</button>
-              <button className={removalCandidateId === friend.id ? dangerButton : secondaryButton} onClick={() => onRemoveFriend(friend.id, friend.username)}>
-                {removalCandidateId === friend.id ? "Confirm" : "Remove"}
-              </button>
-            </div>
-          ))}
-          {!accepted.length && (
-            <div className="p-6 text-sm font-semibold text-muted">
-              Add someone by username or accept an incoming request to build your friends leaderboard.
-            </div>
-          )}
+      </div>
+      <Panel title="On your starting grid" icon={<Users className="h-4 w-4" />}>
+        <div className="mb-4 flex flex-wrap gap-2">
+          <input aria-label="Search your friends" placeholder="Find a friend…" value={search} onChange={(event) => setSearch(event.target.value)} className="min-w-0 flex-1 rounded-xl border border-line bg-surface px-4 py-3 text-sm outline-none focus:ring-2 focus:ring-mint" />
+          <button aria-pressed={onlineOnly} onClick={() => setOnlineOnly(!onlineOnly)} className={`rounded-xl border px-4 py-2 text-sm font-semibold ${onlineOnly ? "border-mint bg-mint/10 text-mint" : "border-line text-muted"}`}>Available now</button>
         </div>
+        {challengeDisabled && <p className="mb-4 text-xs text-brass">Finish your current activity or resolve your pending invitation before sending another challenge.</p>}
+        <div className="grid gap-3 md:grid-cols-2 xl:grid-cols-3">
+          {visible.map((friend) => {
+            const status = connected ? presence[friend.id] ?? "offline" : "offline";
+            return <article key={friend.id} className="rounded-2xl border border-line bg-surface/60 p-4 transition hover:border-mint/40 hover:shadow-soft">
+              <div className="flex items-center gap-3">
+                <div className="relative flex h-12 w-12 shrink-0 items-center justify-center rounded-2xl bg-gradient-to-br from-mint/25 to-sky/20 text-lg font-black text-mint">{friend.username.slice(0, 2).toUpperCase()}<span className={`absolute -bottom-0.5 -right-0.5 h-3.5 w-3.5 rounded-full border-[3px] border-panel ${status === "online" ? "bg-mint" : status === "busy" ? "bg-brass" : "bg-muted"}`} /></div>
+                <div className="min-w-0 flex-1"><h3 className="truncate font-bold" title={friend.username}>{friend.username}</h3><p className={`text-xs ${status === "online" ? "text-mint" : "text-muted"}`}>{!connected ? "Status unavailable" : status === "online" ? "Available to race" : status === "busy" ? "In a test or race" : "Offline"}</p></div>
+                <div className="text-right"><p className="font-mono text-lg font-bold">{friend.rating}</p><p className="text-[10px] uppercase tracking-wider text-muted">{friend.level}</p></div>
+              </div>
+              <div className="mt-5 flex gap-2">
+                <button disabled={status !== "online" || challengeDisabled || !connected} onClick={() => onChallenge(friend.id)} className="flex flex-1 items-center justify-center gap-2 rounded-xl bg-mint px-3 py-2.5 text-sm font-bold text-panel transition hover:brightness-110 disabled:cursor-not-allowed disabled:opacity-40"><Flag className="h-4 w-4" /> Challenge</button>
+                <button aria-label={`View ${friend.username}'s profile`} className="rounded-xl border border-line px-3 text-sm font-semibold hover:bg-panel" onClick={() => onOpenProfile(friend.id)}>Profile</button>
+                <button aria-label={`Remove ${friend.username}`} title={removalCandidateId === friend.id ? "Confirm removal" : "Remove friend"} className={`rounded-xl border border-line px-3 text-xs hover:text-coral ${removalCandidateId === friend.id ? "text-coral" : "text-muted"}`} onClick={() => onRemoveFriend(friend.id, friend.username)}>{removalCandidateId === friend.id ? "Confirm?" : <Trash2 className="h-4 w-4" />}</button>
+              </div>
+            </article>;
+          })}
+        </div>
+        {!visible.length && <div className="rounded-2xl border border-dashed border-line p-10 text-center"><Users className="mx-auto mb-3 h-8 w-8 text-mint/60" /><p className="font-bold">{accepted.length ? "No friends match this view" : "Your next rival is a friend away"}</p><p className="mt-2 text-sm text-muted">{accepted.length ? "Try another name or turn off the availability filter." : "Send a request above to get your first private duel started."}</p></div>}
       </Panel>
     </div>
   );
@@ -2202,23 +2192,6 @@ function PracticeHistoryView({ history }: { history: PracticeHistoryItem[] }) {
         </div>
       </div>
     </Panel>
-  );
-}
-
-function HowToUseModal({ onClose }: { onClose: () => void }) {
-  return (
-    <div className="fixed inset-0 z-[120] flex items-center justify-center bg-ink/35 p-4 backdrop-blur-sm">
-      <div className="pointer-events-none absolute inset-0 bg-[radial-gradient(circle_at_50%_18%,rgb(var(--color-mint)/0.10),transparent_32%),radial-gradient(circle_at_80%_70%,rgb(var(--color-sky)/0.08),transparent_26%)]" />
-      <div className="help-modal-shell relative max-h-[88vh] w-full max-w-6xl overflow-hidden rounded-lg border border-mint/45 bg-panel/95 p-2 shadow-glow backdrop-blur-xl">
-        <div className="absolute inset-x-0 top-0 h-1 bg-gradient-to-r from-mint via-sky to-brass" />
-        <button className="absolute right-5 top-5 z-10 inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-surface/90 text-ink shadow-soft transition hover:border-mint hover:bg-surface" title="Close" onClick={onClose}>
-          <X className="h-5 w-5" />
-        </button>
-        <div className="help-modal-scroll max-h-[calc(88vh-1rem)] overflow-y-auto p-4 pr-5">
-          <HowToUseView />
-        </div>
-      </div>
-    </div>
   );
 }
 
@@ -2404,7 +2377,33 @@ function ProgressCoach({
   );
 }
 
+function UsernameEditor({ username, onSave }: { username: string; onSave: (value: string) => Promise<void> }) {
+  const [draft, setDraft] = useState(username);
+  const [saving, setSaving] = useState(false);
+  const [message, setMessage] = useState("");
+  const [failed, setFailed] = useState(false);
+  useEffect(() => { setDraft(username); }, [username]);
+  return <form className="mb-5 border-b border-line pb-5" onSubmit={async (event) => {
+    event.preventDefault();
+    if (saving || draft.trim() === username) return;
+    setSaving(true); setMessage(""); setFailed(false);
+    try { await onSave(draft.trim()); setMessage("Username updated."); }
+    catch (error) { setFailed(true); setMessage(error instanceof Error ? error.message : "Could not save. Please try again."); }
+    finally { setSaving(false); }
+  }}>
+    <label htmlFor="account-username" className="text-sm font-semibold">Username</label>
+    <p id="username-hint" className="mb-3 mt-1 text-sm text-muted">This is how friends find you. Use 3–24 letters, numbers, or underscores.</p>
+    <div className="flex flex-col gap-3 sm:flex-row">
+      <input id="account-username" className={`${field} sm:max-w-sm`} value={draft} minLength={3} maxLength={24} pattern="[a-zA-Z0-9_]{3,24}" required autoComplete="username" aria-describedby="username-hint username-result" disabled={saving} onChange={(event) => { setDraft(event.target.value); setMessage(""); }} />
+      <button className={primaryButton} disabled={saving || draft.trim() === username} type="submit">{saving ? "Saving…" : "Save username"}</button>
+    </div>
+    <p id="username-result" role="status" className={`mt-2 text-sm ${failed ? "text-coral" : "text-mint"}`}>{message}</p>
+  </form>;
+}
+
 function SettingsView({
+  username,
+  onUsernameChange,
   theme,
   themeShade,
   quietMistakes,
@@ -2429,6 +2428,8 @@ function SettingsView({
   onDeleteTextChange,
   onDeleteAccount
 }: {
+  username: string;
+  onUsernameChange: (username: string) => Promise<void>;
   theme: Theme;
   themeShade: ThemeShade;
   quietMistakes: boolean;
@@ -2554,6 +2555,7 @@ function SettingsView({
       </Panel>
 
       <Panel title="Account" icon={<Users className="h-4 w-4" />}>
+        <UsernameEditor username={username} onSave={onUsernameChange} />
         <div className="grid gap-3 md:grid-cols-2">
           <button className={secondaryButton} onClick={onLogout}>
             <LogOut className="h-4 w-4" /> Logout
@@ -3090,7 +3092,7 @@ const achievementMilestones: {
 
 const minuteOptions = Array.from({ length: 16 }, (_, index) => index);
 const secondOptions = Array.from({ length: 60 }, (_, index) => index);
-const raceTimeOptions = Array.from({ length: 14 }, (_, index) => (index + 2) * 60);
+const raceTimeOptions = Array.from({ length: 15 }, (_, index) => (index + 1) * 60);
 
 const easyWords = [
   "about", "above", "again", "always", "answer", "around", "basic", "before", "better", "bright", "camera", "chance", "change", "choice",
@@ -3428,7 +3430,7 @@ function coachHintForView(currentView: ActiveView, context: { dailyChallenge: Da
 function shouldIgnoreShortcut(target: EventTarget | null) {
   if (!(target instanceof HTMLElement)) return false;
   const tag = target.tagName.toLowerCase();
-  return tag === "input" || tag === "select" || tag === "textarea" || target.isContentEditable;
+  return tag === "input" || tag === "select" || tag === "textarea" || Boolean(target.closest("a, button, nav, header")) || target.isContentEditable;
 }
 
 function shouldBlockTyping(mode: ErrorLockMode, typed: string, target: string, nextKey: string) {
@@ -3468,8 +3470,6 @@ const timerSelect = "mt-1 h-44 w-full overflow-y-auto rounded-lg border border-l
 const primaryButton = "inline-flex w-full items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-3 py-2 font-bold text-white shadow-glow transition hover:brightness-105 disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:brightness-100";
 const secondaryButton = "inline-flex w-full items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-3 py-2 font-bold transition hover:bg-surface hover:shadow-soft disabled:cursor-not-allowed disabled:opacity-60 disabled:hover:bg-surface/75 disabled:hover:shadow-none";
 const activeControl = "inline-flex w-full items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-3 py-2 font-bold text-white shadow-glow";
-const compactButton = "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-4 py-2 text-center font-bold transition hover:bg-surface hover:shadow-soft";
-const activeCompactButton = "inline-flex min-h-12 w-full items-center justify-center gap-2 rounded-lg border border-mint bg-mint px-4 py-2 text-center font-bold text-white shadow-glow";
 const authThemeButton = "inline-flex items-center justify-center gap-2 rounded-lg border border-line bg-surface/75 px-3 py-2 text-sm font-bold transition hover:bg-surface hover:shadow-soft";
 const iconButton = "inline-flex h-10 w-10 items-center justify-center rounded-lg border border-line bg-surface/75 transition hover:bg-surface hover:shadow-soft";
 const dangerButton = "inline-flex w-full items-center justify-center gap-2 rounded-lg border border-coral bg-coral/15 px-3 py-2 font-bold text-coral transition hover:bg-coral hover:text-white hover:shadow-soft";

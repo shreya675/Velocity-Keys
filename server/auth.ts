@@ -6,9 +6,11 @@ import { z } from "zod";
 import { prisma } from "../lib/prisma";
 import type { ClientUser } from "../lib/types";
 
+export const usernameSchema = z.string().trim().min(3).max(24).regex(/^[a-zA-Z0-9_]+$/);
+
 const registerSchema = z.object({
   email: z.string().email(),
-  username: z.string().min(3).max(24).regex(/^[a-zA-Z0-9_]+$/),
+  username: usernameSchema,
   password: z.string().min(8)
 });
 

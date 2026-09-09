@@ -2,6 +2,107 @@
 @tailwind components;
 @tailwind utilities;
 
+@layer components {
+  .header-icon {
+    @apply inline-flex h-10 w-10 items-center justify-center rounded-lg text-muted transition-colors hover:bg-surface hover:text-ink;
+  }
+  .header-popover {
+    @apply absolute top-[calc(100%+16px)] z-50 overflow-hidden rounded-xl border border-line bg-panel shadow-xl;
+  }
+  .account-link {
+    @apply flex items-center gap-3 rounded-lg px-3 py-2.5 text-sm transition-colors hover:bg-surface;
+  }
+  .account-link[aria-current="page"] {
+    @apply bg-surface font-medium;
+  }
+}
+
+.site-header a:focus-visible,
+.site-header button:focus-visible {
+  outline: 2px solid rgb(var(--color-mint));
+  outline-offset: 4px;
+}
+
+.app-shell .glass-panel::before { display: none; }
+.app-shell .glass-panel { box-shadow: none; }
+
+.nav-wordmark { display: inline-flex; white-space: nowrap; }
+.nav-letter { display: inline-block; animation: brand-letter-enter 420ms ease-out both; animation-delay: var(--letter-delay); }
+.nav-letter > span { display: inline-block; }
+.nav-brand-icon { transition: transform 240ms ease, box-shadow 240ms ease; }
+.nav-brand:is(:hover, :focus-visible) .nav-brand-icon {
+  transform: translateY(-2px) rotate(-6deg);
+  box-shadow: 0 4px 16px rgb(var(--color-mint) / 0.22);
+}
+.nav-brand:is(:hover, :focus-visible) .nav-letter > span {
+  animation: brand-letter-wave 500ms ease-in-out both;
+  animation-delay: var(--letter-delay);
+}
+.header-popover { transform-origin: top right; animation: navigation-reveal 160ms ease-out both; }
+#mobile-navigation { animation: navigation-reveal 180ms ease-out both; }
+.account-link { transition: background-color 160ms ease, color 160ms ease; }
+.account-link svg { transition: transform 160ms ease; }
+.account-link:hover svg { transform: translateX(2px); }
+
+.nav-track-line {
+  position: absolute; inset: 50% 0 auto; height: 1px;
+  background: linear-gradient(90deg, transparent, rgb(var(--color-mint) / 0.35) 20%, rgb(var(--color-mint) / 0.35) 80%, transparent);
+}
+.nav-track-runner {
+  position: absolute; inset: 0;
+  animation: nav-track-run 5s linear infinite;
+}
+.nav-track-runner > span {
+  position: absolute; top: 12px; left: 0; width: 3px; height: 16px; border-radius: 3px;
+  background: rgb(var(--color-mint)); box-shadow: 0 0 12px rgb(var(--color-mint) / 0.4);
+}
+.nav-track-key {
+  position: absolute; top: 8px; display: grid; place-items: center;
+  width: 24px; height: 24px; border: 1px solid rgb(var(--color-line)); border-radius: 5px;
+  background: rgb(var(--color-panel)); color: rgb(var(--color-muted));
+  font: 600 10px ui-monospace, monospace;
+  animation: nav-track-tap 5s ease-in-out infinite;
+}
+@keyframes nav-track-run {
+  0% { transform: translateX(0); opacity: 0; }
+  8%, 85% { opacity: 0.85; }
+  100% { transform: translateX(100%); opacity: 0; }
+}
+@keyframes nav-track-tap {
+  0%, 18%, 100% { transform: translateY(0); }
+  8% { transform: translateY(-4px); border-color: rgb(var(--color-mint)); color: rgb(var(--color-mint)); }
+}
+
+@keyframes brand-letter-enter {
+  from { opacity: 0; transform: translateY(5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+@keyframes brand-letter-wave {
+  0%, 100% { transform: translateY(0); }
+  45% { transform: translateY(-3px); color: rgb(var(--color-mint)); }
+}
+@keyframes navigation-reveal {
+  from { opacity: 0; transform: translateY(-5px); }
+  to { opacity: 1; transform: translateY(0); }
+}
+
+@media (max-width: 1023px) {
+  .site-header #notification-panel {
+    position: fixed;
+    top: 80px;
+    left: 16px;
+    right: 16px;
+    width: auto;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .site-header * { transition: none !important; animation: none !important; }
+  .nav-brand:is(:hover, :focus-visible) .nav-brand-icon,
+  .account-link:hover svg { transform: none; }
+  .nav-track-runner { display: none; }
+}
+
 :root {
   --color-ink: 16 18 20;
   --color-muted: 103 94 82;

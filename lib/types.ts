@@ -154,6 +154,18 @@ export type FriendUser = {
   level: string;
 };
 
+export type FriendPresence = "online" | "busy" | "offline";
+export type RaceInvitation = {
+  id: string;
+  from: Pick<ClientUser, "id" | "username" | "rating">;
+  to: Pick<ClientUser, "id" | "username" | "rating">;
+  expiresAt: number;
+};
+export type FriendsLiveState = {
+  presence: Record<string, FriendPresence>;
+  invitations: RaceInvitation[];
+};
+
 export type FriendRequestSummary = {
   id: string;
   status: "PENDING" | "ACCEPTED" | "REJECTED";

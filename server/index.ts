@@ -3,12 +3,13 @@ import http from "node:http";
 import express from "express";
 import next from "next";
 import { Server } from "socket.io";
-import { TextMode } from "@prisma/client";
+import { Prisma, TextMode } from "@prisma/client";
 import { prisma } from "../lib/prisma";
 import { levelForRating, practiceRatingDelta, practiceScore } from "../lib/race-math";
 import type { CodeLanguage, DailyChallengeSummary, FriendsSummary, KeystrokePayload, LeaderboardSummary, LeaderboardUser, PracticeDifficulty, PracticeHistoryItem, PracticeMode, PublicRoomSummary, VocabularyEntry } from "../lib/types";
-import { googleLogin, login, register, requireAuth, userFromToken } from "./auth";
+import { googleLogin, login, register, requireAuth, userFromToken, publicUser, usernameSchema } from "./auth";
 import { RaceService } from "./race-service";
+import { installFriendChallenges } from "./friend-challenges";
 
 const dev = process.env.NODE_ENV !== "production";
 const port = Number(process.env.PORT ?? 3000);
@@ -34,6 +35,25 @@ async function main() {
 
   expressApp.get("/api/me", requireAuth, (req, res) => {
     res.json({ user: req.user });
+  });
+
+  expressApp.patch("/api/account/username", requireAuth, async (req, res) => {
+    const parsed = usernameSchema.safeParse(req.body?.username);
+    if (!parsed.success) return res.status(400).json({ error: "Use 3–24 letters, numbers, or underscores." });
+    try {
+      const user = publicUser(await prisma.user.update({ where: { id: req.user!.id }, data: { username: parsed.data } }));
+      for (const socket of io.sockets.sockets.values()) {
+        if (socket.data.user?.id === user.id) {
+          Object.assign(socket.data.user, user);
+          socket.emit("account:updated", user);
+        }
+      }
+      for (const snapshot of races.updateUsername(user.id, user.username)) io.to(snapshot.roomCode).emit("race:snapshot", snapshot);
+      return res.json({ user });
+    } catch (error) {
+      if (error instanceof Prisma.PrismaClientKnownRequestError && error.code === "P2002") return res.status(409).json({ error: "That username is already taken. Try another one." });
+      return res.status(500).json({ error: "Could not update your username. Please try again." });
+    }
   });
 
   expressApp.delete("/api/account", requireAuth, async (req, res) => {
@@ -252,11 +272,12 @@ async function main() {
     const accuracy = clampNumber(req.body.accuracy, 0, 100);
     const consistency = clampNumber(req.body.consistency, 0, 100);
     const errors = Math.round(clampNumber(req.body.errors, 0, 10000));
-    const durationSeconds = normalizeDuration(req.body.durationSeconds ?? challenge.durationSeconds);
+    const durationSeconds = challenge.durationSeconds;
+    const typed = typeof req.body.typed === "string" ? req.body.typed.slice(0, challenge.prompt.length) : "";
     const user = await prisma.user.findUnique({ where: { id: req.user!.id } });
     if (!user) return res.status(401).json({ error: "Authentication required." });
 
-    const score = practiceScore({ wpm, accuracy, consistency, errors, durationSeconds, currentRating: user.rating, difficulty: "MEDIUM" });
+    const score = practiceScore({ wpm, accuracy, consistency, errors, durationSeconds, currentRating: user.rating, difficulty: "MEDIUM", typedChars: typed.length, promptLength: challenge.prompt.length });
     const existing = await prisma.dailyChallengeEntry.findUnique({
       where: { challengeId_userId: { challengeId: challenge.id, userId: user.id } }
     });
@@ -433,6 +454,16 @@ async function main() {
       const snapshot = races.recordKeystroke(code, socket.data.user, event);
       io.to(snapshot.roomCode).emit("race:snapshot", snapshot);
     });
+  });
+
+  installFriendChallenges(io, {
+    friendIds: acceptedFriendIds,
+    getUser: async (id) => {
+      const user = await prisma.user.findUnique({ where: { id } });
+      return user ? { id: user.id, username: user.username, email: user.email, rating: user.rating } : null;
+    },
+    isBusy: (id) => races.isUserBusy(id),
+    createDuel: (users) => races.createFriendDuel(users)
   });
 
   server.listen(port, () => {
@@ -618,7 +649,18 @@ async function leaderboardUser(user: { id: string; username: string; rating: num
 async function getOrCreateDailyChallenge() {
   const challengeDate = dailyChallengeDate();
   const existing = await prisma.dailyChallenge.findUnique({ where: { challengeDate } });
-  if (existing) return existing;
+  if (existing) {
+    const expandedPrompt = dailyPromptForDate(challengeDate);
+    if (expandedPrompt.startsWith(`${existing.prompt} `)) {
+      // Keep passages with recorded results immutable.
+      await prisma.dailyChallenge.updateMany({
+        where: { id: existing.id, entries: { none: {} } },
+        data: { prompt: expandedPrompt }
+      });
+      return (await prisma.dailyChallenge.findUnique({ where: { id: existing.id } }))!;
+    }
+    return existing;
+  }
   return prisma.dailyChallenge.create({
     data: {
       challengeDate,
@@ -671,7 +713,8 @@ function dailyChallengeDate(date = new Date()) {
 
 function dailyPromptForDate(challengeDate: string) {
   const seed = challengeDate.split("").reduce((sum, char) => sum + char.charCodeAt(0), 0);
-  return dailyChallengePrompts[seed % dailyChallengePrompts.length];
+  const index = seed % dailyChallengePrompts.length;
+  return `${dailyChallengePrompts[index]} ${dailyChallengeContinuations[index % dailyChallengeContinuations.length]}`;
 }
 
 async function awardAchievements(
@@ -787,7 +830,7 @@ function normalizeDuration(value: unknown) {
 function normalizeRaceDuration(value: unknown) {
   const duration = Math.floor(Number(value));
   if (!Number.isFinite(duration)) return 120;
-  return Math.max(120, Math.min(900, duration));
+  return Math.max(60, Math.min(900, duration));
 }
 
 function clampNumber(value: unknown, min: number, max: number) {
@@ -1017,6 +1060,13 @@ const codeSnippets: Record<CodeLanguage, string[]> = {
     "INSERT INTO \"Achievement\" (id, \"userId\", code, title, description, category)\nVALUES ($1, $2, 'FIRST_TEST', 'First Test', 'Completed one test.', 'Practice')\nON CONFLICT (\"userId\", code) DO NOTHING;"
   ]
 };
+
+const dailyChallengeContinuations = [
+  "Consider a gardener restoring a neglected courtyard. Before planting anything, she observes how sunlight moves across the walls and where rainwater gathers after a storm. Her meticulous notes reveal that a struggling tree needs better drainage, not more water. She loosens the compacted soil, removes brittle branches, and chooses native flowers that can withstand the summer heat. For several weeks, the changes seem insignificant. Then new leaves emerge, insects return, and the courtyard becomes a refuge for neighbors seeking a quiet afternoon. The transformation is gradual, yet every thoughtful adjustment contributes to its resilience. Learning follows a similar pattern: observation identifies the obstacle, patience allows an experiment to develop, and reflection determines what to change next. Progress becomes sustainable when we respond to evidence instead of impatience. A disappointing attempt can therefore be useful information rather than a verdict on our ability. The essential task is to notice what improved, understand what remains difficult, and return with a purposeful plan.",
+  "In a coastal town, a group of volunteers decides to restore the abandoned library. Their initial enthusiasm produces dozens of suggestions, but very little practical work. A retired architect proposes a more coherent approach: inspect the building, establish priorities, and assign responsibilities according to experience. One team repairs the windows while another catalogs the surviving books. Local businesses contribute materials, and students interview older residents about the building's history. Disagreements still arise, especially when resources become scarce, yet transparent decisions help preserve mutual trust. Gradually, an ambitious proposal becomes a sequence of achievable tasks. When the library reopens, its greatest achievement is more than a renovated room. The project has strengthened cooperation among people who previously passed each other without speaking. Their experience illustrates why perseverance needs structure. Clear expectations reduce uncertainty, modest milestones sustain motivation, and constructive feedback prevents avoidable mistakes. A worthwhile undertaking rarely depends on a single extraordinary effort; it grows through dependable contributions that make the next step possible.",
+  "During a research expedition, a young biologist discovers an unfamiliar plant beside a mountain stream. Its unusual leaves suggest an adaptation to the cold, but she resists the temptation to announce a conclusion immediately. Instead, she photographs the specimen, records the surrounding conditions, and compares her observations with earlier surveys. A colleague offers an alternative explanation: the leaf shape may help the plant conserve moisture during periods of strong wind. Their discussion becomes more productive when each person distinguishes evidence from speculation. Neither interpretation is treated as a personal possession that must be defended at all costs. Back at the laboratory, further examination reveals that several environmental pressures have influenced the plant's development. The explanation is less simple than either researcher expected, and considerably more interesting. Intellectual humility makes that discovery possible. By acknowledging uncertainty and asking precise questions, they replace a convenient assumption with a more comprehensive understanding. The same habit improves everyday conversations, where attentive listening can reveal details that a hurried judgment would overlook.",
+  "At a small railway station, the morning supervisor prepares for an approaching storm. She reviews the forecast, checks emergency supplies, and explains possible delays to the passengers waiting on the platform. Her composed manner does not eliminate the uncertainty, but it gives everyone a clear sense of what will happen next. When a fallen branch interrupts service, the staff arrange alternative transport and provide regular updates. An impatient traveler gradually relaxes after learning why the interruption occurred and how the team is responding. Effective leadership often consists of these unremarkable acts: anticipating difficulties, communicating honestly, and adapting without abandoning essential responsibilities. Once the weather improves, the supervisor gathers her colleagues to discuss what worked and what needs revision. They identify a confusing announcement and an overlooked supply shortage, then update their procedures. The experience becomes preparation for a future challenge. Resilience is strengthened by this willingness to examine imperfect outcomes. Confidence becomes more reliable when it rests on preparation, thoughtful cooperation, and the ability to recover with care."
+];
 
 const dailyChallengePrompts = [
   "Measured progress often feels ordinary at first, but deliberate practice compounds into quiet confidence when you return with patience every day. A resilient typist notices small mistakes early, adjusts without frustration, and protects rhythm through the entire passage.",
